@@ -1,47 +1,43 @@
-
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import oliviaAvatar from "../../public/avatars/olivia-avatar.png";
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import oliviaAvatar from '../../public/avatars/olivia-avatar.png'
 
-
-
-
-const currentFunction = ref(null);
+const currentFunction = ref(null)
 
 function showFunctionA() {
-  currentFunction.value = 'A';  // Hiển thị nội dung của chức năng A trong sidebar
+  currentFunction.value = 'A' // Hiển thị nội dung của chức năng A trong sidebar
 }
 
 function showFunctionB() {
-  currentFunction.value = 'B';  // Hiển thị nội dung của chức năng B trong sidebar
+  currentFunction.value = 'B' // Hiển thị nội dung của chức năng B trong sidebar
 }
 interface Conversation {
-  id: string;
-  name: string;
-  lastMessage: string;
-  timestamp: string;
-  avatar: string;
-  online: boolean;
-  unreadCount: number;
+  id: string
+  name: string
+  lastMessage: string
+  timestamp: string
+  avatar: string
+  online: boolean
+  unreadCount: number
 }
 
 interface Message {
-  id: string;
-  direction: "in" | "out";
-  text: string;
-  senderName: string;
-  time: string;
-  avatar?: string;
-  status?: "sent" | "delivered" | "read";
+  id: string
+  direction: 'in' | 'out'
+  text: string
+  senderName: string
+  time: string
+  avatar?: string
+  status?: 'sent' | 'delivered' | 'read'
 }
 
 // Reactive data
-const searchQuery = ref("");
-const navSearchQuery = ref("");
-const messageText = ref("");
-const activeConversationId = ref<string>("1");
-const messagesContainer = ref<HTMLElement | null>(null);
-const showFilterDropdown = ref(false);
+const searchQuery = ref('')
+const navSearchQuery = ref('')
+const messageText = ref('')
+const activeConversationId = ref<string>('1')
+const messagesContainer = ref<HTMLElement | null>(null)
+const showFilterDropdown = ref(false)
 
 // Filter states
 const filterOptions = ref({
@@ -54,288 +50,294 @@ const filterOptions = ref({
     important: false,
     archived: false,
   },
-});
+})
 
 // Mock conversations data - sẽ thay thế bằng Zalo API
 const conversations = ref<Conversation[]>([
   {
-    id: "1",
-    name: "Olivia Rhye",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '1',
+    name: 'Olivia Rhye',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar: oliviaAvatar,
     online: true,
     unreadCount: 2,
   },
   {
-    id: "2",
-    name: "Adam Levine",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '2',
+    name: 'Adam Levine',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "https://api.dicebear.com/7.x/avataaars/svg?seed=Adam&backgroundColor=f59e0b",
+      'https://api.dicebear.com/7.x/avataaars/svg?seed=Adam&backgroundColor=f59e0b',
     online: true,
     unreadCount: 0,
   },
   {
-    id: "3",
-    name: "Kadin Botosh",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '3',
+    name: 'Kadin Botosh',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "https://api.dicebear.com/7.x/avataaars/svg?seed=Kadin&backgroundColor=10b981",
+      'https://api.dicebear.com/7.x/avataaars/svg?seed=Kadin&backgroundColor=10b981',
     online: true,
     unreadCount: 1,
   },
   {
-    id: "4",
-    name: "Wilson Press",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '4',
+    name: 'Wilson Press',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFQzQ4OTkiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+",
+      'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFQzQ4OTkiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+',
     online: true,
     unreadCount: 0,
   },
   {
-    id: "5",
-    name: "Erin George",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '5',
+    name: 'Erin George',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "https://api.dicebear.com/7.x/avataaars/svg?seed=Erin&backgroundColor=8b5cf6",
+      'https://api.dicebear.com/7.x/avataaars/svg?seed=Erin&backgroundColor=8b5cf6',
     online: true,
     unreadCount: 0,
   },
   {
-    id: "6",
-    name: "Giana Baptista",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '6',
+    name: 'Giana Baptista',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiMwNkI2RDQiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+",
+      'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiMwNkI2RDQiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+',
     online: true,
     unreadCount: 0,
   },
   {
-    id: "7",
-    name: "Jaydon Good",
-    lastMessage: "There are many variations of passages",
-    timestamp: "01:10 PM",
+    id: '7',
+    name: 'Jaydon Good',
+    lastMessage: 'There are many variations of passages',
+    timestamp: '01:10 PM',
     avatar:
-      "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFRjQ0NDQiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLjIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+",
+      'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFRjQ0NDQiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLjIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMTIgMTRDOS4zMzk3MiAxNCA2LjkyMTc4IDE1LjMzMzUgNS42ODE3OCAxNy42MzUxQzUuMDc3OCAxOC43NDkxIDUuMDc3OCAxOS45ODQ3IDUuNjgxNzggMjEuMDk4N0M2LjkyMTc4IDIzLjQwMDMgOS4zMzk3MiAyNC43MzM4IDEyIDI0LjczMzhDMTQuNjYwMyAyNC43MzM4IDE3LjA3ODIgMjMuNDAwMyAxOC4zMTgyIDIxLjA5ODdDMTguOTIyMiAxOS45ODQ3IDE4LjkyMjIgMTguNzQ5MSAxOC4zMTgyIDE3LjYzNTFDMTcuMDc4MiAxNS4zMzM1IDE0LjY2MDMgMTQgMTIgMTRaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4KPC9zdmc+',
     online: true,
     unreadCount: 0,
   },
-]);
+])
 
 // Mock messages data - sẽ thay thế bằng Zalo API
 const messages = ref<Message[]>([
   {
-    id: "1",
-    direction: "in",
-    text: "Hi Khuyen, do you have a moment to talk about the new project?",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '1',
+    direction: 'in',
+    text: 'Hi Khuyen, do you have a moment to talk about the new project?',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "2",
-    direction: "in",
-    text: "Sure, Olivia. What's on your mind?",
-    senderName: "Nha Khuyen",
-    time: "00:00",
-    status: "read",
+    id: '2',
+    direction: 'in',
+    text: 'Sure, Olivia. What\'s on your mind?',
+    senderName: 'Nha Khuyen',
+    time: '00:00',
+    status: 'read',
   },
   {
-    id: "3",
-    direction: "in",
-    text: "I've just reviewed the client's requirements, and we need to adjust our timeline. How far along are you with the initial draft?",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '3',
+    direction: 'in',
+    text: 'I\'ve just reviewed the client\'s requirements, and we need to adjust our timeline. How far along are you with the initial draft?',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "4",
-    direction: "in",
-    text: "I'm about 70% done. Most of the structure is complete, but I still need to polish the details and add the visuals.",
-    senderName: "Nha Khuyen",
-    time: "00:00",
-    status: "read",
+    id: '4',
+    direction: 'in',
+    text: 'I\'m about 70% done. Most of the structure is complete, but I still need to polish the details and add the visuals.',
+    senderName: 'Nha Khuyen',
+    time: '00:00',
+    status: 'read',
   },
   {
-    id: "5",
-    direction: "in",
-    text: "That's good progress. The client is asking for a preview by Friday. Do you think you can send me a version before then, maybe by Thursday afternoon?",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '5',
+    direction: 'in',
+    text: 'That\'s good progress. The client is asking for a preview by Friday. Do you think you can send me a version before then, maybe by Thursday afternoon?',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "6",
-    direction: "in",
-    text: "Yes, I can manage that. I'll stay late today and tomorrow if necessary.",
-    senderName: "Nha Khuyen",
-    time: "00:00",
-    status: "read",
+    id: '6',
+    direction: 'in',
+    text: 'Yes, I can manage that. I\'ll stay late today and tomorrow if necessary.',
+    senderName: 'Nha Khuyen',
+    time: '00:00',
+    status: 'read',
   },
   {
-    id: "7",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '7',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "8",
-    direction: "in",
-    text: "Got it. Should I also prepare a short presentation, or just send the draft?",
-    senderName: "Nha Khuyen",
-    time: "00:00",
-    status: "read",
+    id: '8',
+    direction: 'in',
+    text: 'Got it. Should I also prepare a short presentation, or just send the draft?',
+    senderName: 'Nha Khuyen',
+    time: '00:00',
+    status: 'read',
   },
   {
-    id: "9",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '9',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "10",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '10',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "11",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '11',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "12",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '12',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "13",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '13',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "14",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '14',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "15",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '15',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "16",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '16',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "17",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '17',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
   {
-    id: "18",
-    direction: "in",
-    text: "Great. Also, make sure to highlight the key features—they're very focused on functionality this time.",
-    senderName: "Olivia Rhye",
-    time: "00:00",
+    id: '18',
+    direction: 'in',
+    text: 'Great. Also, make sure to highlight the key features—they\'re very focused on functionality this time.',
+    senderName: 'Olivia Rhye',
+    time: '00:00',
     avatar: oliviaAvatar,
   },
-]);
+])
 
 // Computed properties
 const filteredConversations = computed(() => {
-  let filtered = conversations.value;
+  let filtered = conversations.value
 
   // Apply search filter
-  const query = navSearchQuery.value || searchQuery.value;
+  const query = navSearchQuery.value || searchQuery.value
   if (query) {
     filtered = filtered.filter(
-      (conv) =>
-        conv.name.toLowerCase().includes(query.toLowerCase()) ||
-        conv.lastMessage.toLowerCase().includes(query.toLowerCase())
-    );
+      conv =>
+        conv.name.toLowerCase().includes(query.toLowerCase())
+        || conv.lastMessage.toLowerCase().includes(query.toLowerCase()),
+    )
   }
 
   // Apply status filters
-  const { status, messageType } = filterOptions.value;
+  const { status, messageType } = filterOptions.value
 
   if (status.online || status.offline) {
     filtered = filtered.filter((conv) => {
-      if (status.online && status.offline) return true;
-      if (status.online) return conv.online;
-      if (status.offline) return !conv.online;
-      return true;
-    });
+      if (status.online && status.offline)
+        return true
+      if (status.online)
+        return conv.online
+      if (status.offline)
+        return !conv.online
+      return true
+    })
   }
 
   // Apply message type filters
   if (messageType.unread || messageType.important || messageType.archived) {
     filtered = filtered.filter((conv) => {
-      if (messageType.unread && conv.unreadCount > 0) return true;
-      if (messageType.important) return true; // Can add important flag to conversations later
-      if (messageType.archived) return false; // Can add archived flag to conversations later
+      if (messageType.unread && conv.unreadCount > 0)
+        return true
+      if (messageType.important)
+        return true // Can add important flag to conversations later
+      if (messageType.archived)
+        return false // Can add archived flag to conversations later
       return (
         !messageType.unread && !messageType.important && !messageType.archived
-      );
-    });
+      )
+    })
   }
 
-  return filtered;
-});
+  return filtered
+})
 
 const activeConversation = computed(() => {
   return conversations.value.find(
-    (conv) => conv.id === activeConversationId.value
-  );
-});
+    conv => conv.id === activeConversationId.value,
+  )
+})
 
 // Methods
 function selectConversation(id: string) {
-  activeConversationId.value = id;
-  scrollToBottom();
+  activeConversationId.value = id
+  scrollToBottom()
 }
 
 function handleAddUser() {
-  console.warn("Add user clicked");
+  console.warn('Add user clicked')
 }
 
 function handleFilter() {
-  showFilterDropdown.value = !showFilterDropdown.value;
+  showFilterDropdown.value = !showFilterDropdown.value
 }
 
 function clearAllFilters() {
@@ -349,124 +351,119 @@ function clearAllFilters() {
       important: false,
       archived: false,
     },
-  };
-  showFilterDropdown.value = false;
+  }
+  showFilterDropdown.value = false
 }
 
 function applyFilters() {
-  showFilterDropdown.value = false;
+  showFilterDropdown.value = false
 }
 
 function sendMessage() {
-  if (!messageText.value.trim()) return;
+  if (!messageText.value.trim())
+    return
 
   const newMessage: Message = {
     id: Date.now().toString(),
-    direction: "in",
+    direction: 'in',
     text: messageText.value.trim(),
-    senderName: "Nha Khuyen",
+    senderName: 'Nha Khuyen',
     time: new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
+      hour: '2-digit',
+      minute: '2-digit',
     }),
-    status: "sent",
-  };
+    status: 'sent',
+  }
 
-  messages.value.push(newMessage);
-  messageText.value = "";
+  messages.value.push(newMessage)
+  messageText.value = ''
 
   nextTick(() => {
-    scrollToBottom();
-  });
+    scrollToBottom()
+  })
 }
 
 function autoResize(event: Event) {
-  const textarea = event.target as HTMLTextAreaElement;
-  textarea.style.height = "auto";
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+  const textarea = event.target as HTMLTextAreaElement
+  textarea.style.height = 'auto'
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`
 }
 
 function scrollToBottom() {
   if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
   }
 }
 
 function handleImageError(event: Event, conversationName: string) {
-  const img = event.target as HTMLImageElement;
+  const img = event.target as HTMLImageElement
 
   // Check if we've already tried the fallback to avoid infinite loop
-  if (img.src.includes("ui-avatars.com")) {
+  if (img.src.includes('ui-avatars.com')) {
     console.error(
-      `Both original and fallback avatar failed for ${conversationName}`
-    );
+      `Both original and fallback avatar failed for ${conversationName}`,
+    )
     // Remove the error handler to prevent further loops
-    img.onerror = null;
+    img.onerror = null
     // Set a simple data URL as last resort
-    img.src =
-      "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFNUU3RUIiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSIjOUM5Q0EwIi8+CjxwYXRoIGQ9Ik0xMiAxNEM5LjMzOTcyIDE0IDYuOTIxNzggMTUuMzMzNSA1LjY4MTc4IDE3LjYzNTFDNS4wNzc4IDE4Ljc0OTEgNS4wNzc4IDE5Ljk4NDcgNS42ODE3OCAyMS4wOTg3QzYuOTIxNzggMjMuNDAwMyA5LjMzOTcyIDI0LjczMzggMTIgMjQuNzMzOEMxNC42NjAzIDI0LjczMzggMTcuMDc4MiAyMy40MDAzIDE4LjMxODIgMjEuMDk4N0MxOC45MjIyIDE5Ljk4NDcgMTguOTIyMiAxOC43NDkxIDE4LjMxODIgMTcuNjM1MUMxNy4wNzgyIDE1LjMzMzUgMTQuNjYwMyAxNCAxMiAxNFoiIGZpbGw9IiM5QzlDQTAiLz4KPC9zdmc+Cjwvc3ZnPgo=";
-    return;
+    img.src
+      = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNFNUU3RUIiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSIjOUM5Q0EwIi8+CjxwYXRoIGQ9Ik0xMiAxNEM5LjMzOTcyIDE0IDYuOTIxNzggMTUuMzMzNSA1LjY4MTc4IDE3LjYzNTFDNS4wNzc4IDE4Ljc0OTEgNS4wNzc4IDE5Ljk4NDcgNS42ODE3OCAyMS4wOTg3QzYuOTIxNzggMjMuNDAwMyA5LjMzOTcyIDI0LjczMzggMTIgMjQuNzMzOEMxNC42NjAzIDI0LjczMzggMTcuMDc4MiAyMy40MDAzIDE4LjMxODIgMjEuMDk4N0MxOC45MjIyIDE5Ljk4NDcgMTguOTIyMiAxOC43NDkxIDE4LjMxODIgMTcuNjM1MUMxNy4wNzgyIDE1LjMzMzUgMTQuNjYwMyAxNCAxMiAxNFoiIGZpbGw9IiM5QzlDQTAiLz4KPC9zdmc+Cjwvc3ZnPgo='
+    return
   }
 
-  console.error(`Failed to load avatar for ${conversationName}`, event);
+  console.error(`Failed to load avatar for ${conversationName}`, event)
   // Set fallback avatar
   img.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
-    conversationName
-  )}&background=random`;
+    conversationName,
+  )}&background=random`
 }
 
 // Future: Load conversations from Zalo API
 async function _loadZaloConversations() {
-  console.warn("Zalo API integration pending");
+  console.warn('Zalo API integration pending')
 }
 
 // Future: Load messages from Zalo API
 async function _loadZaloMessages(_conversationId: string) {
-  console.warn("Zalo API integration pending");
+  console.warn('Zalo API integration pending')
 }
 
 // Click outside handler to close dropdown
 function handleClickOutside(event: Event) {
-  const target = event.target as HTMLElement;
-  const filterButton = target.closest(".filter-dropdown-container");
+  const target = event.target as HTMLElement
+  const filterButton = target.closest('.filter-dropdown-container')
   if (!filterButton && showFilterDropdown.value) {
-    showFilterDropdown.value = false;
+    showFilterDropdown.value = false
   }
 }
 
 // Lifecycle
 onMounted(() => {
-  scrollToBottom();
-  document.addEventListener("click", handleClickOutside);
+  scrollToBottom()
+  document.addEventListener('click', handleClickOutside)
   // loadZaloConversations() // Sẽ enable sau khi có Zalo API
-});
+})
 
 onUnmounted(() => {
-  document.removeEventListener("click", handleClickOutside);
-});
+  document.removeEventListener('click', handleClickOutside)
+})
 </script>
 
 <template>
-  <private-view title="Messages">
+  <private-view title="Messages aLO">
     <template #title-outer:prepend>
       <v-button class="header-icon" rounded disabled icon secondary>
         <v-icon name="inbox" />
       </v-button>
     </template>
-     <!-- Nút để kích hoạt chức năng -->
-    <template #actions>
-      <v-button @click="showFunctionA">Chức năng A</v-button>
-      <v-button @click="showFunctionB">Chức năng B</v-button>
-    </template>
 
     <!-- Sidebar tùy biến theo trạng thái -->
     <template #sidebar>
-      <sidebar-detail icon="info" title="Thông tin chung" v-if="currentFunction === 'A'">
-        Nội dung chức năng A hiển thị ở đây.
-      </sidebar-detail>
-      <sidebar-detail icon="layers" title="Chức năng B" v-if="currentFunction === 'B'">
-        Nội dung chức năng B hiển thị ở đây.
-      </sidebar-detail>
+      <sidebar-detail v-if="currentFunction === 'A'" icon="search" class="my-sidebar-detail" title="Search for messages" close />
+      <sidebar-detail v-if="currentFunction === 'B'" class="my-sidebar-detail" icon="info" title="Conversation information" close />
+      <sidebar-detail v-if="currentFunction === 'B'" class="my-sidebar-detail" icon="swap_vert" title="Image/video" />
+      <sidebar-detail v-if="currentFunction === 'B'" class="my-sidebar-detail" icon="layers" title="Link" />
+      <sidebar-detail v-if="currentFunction === 'B'" class="my-sidebar-detail" icon="sync_disabled" title="File" />
     </template>
 
     <template #navigation>
@@ -477,7 +474,7 @@ onUnmounted(() => {
             v-model="navSearchQuery"
             placeholder="Search conversation"
             class="w-full pl-10 pr-3 py-3 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
-          />
+          >
         </div>
 
         <VDivider />
@@ -548,7 +545,7 @@ onUnmounted(() => {
                         v-model="filterOptions.status.online"
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <span class="ml-2 text-sm text-gray-700">Tất cả</span>
                     </label>
                     <label class="flex items-center cursor-pointer">
@@ -556,7 +553,7 @@ onUnmounted(() => {
                         v-model="filterOptions.status.offline"
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <span class="ml-2 text-sm text-gray-700">Chưa đọc</span>
                     </label>
                     <VDivider />
@@ -576,53 +573,51 @@ onUnmounted(() => {
                       <input
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <div
                         class="ml-2 w-3 h-3 rounded-full bg-red-500 mr-3"
-                      ></div>
+                      />
                       <span class="text-sm text-gray-700">Khách hàng</span>
                     </label>
                     <label class="flex items-center cursor-pointer">
                       <input
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <div
                         class="ml-2 w-3 h-3 rounded-full bg-green-500 mr-3"
-                      ></div>
+                      />
                       <span class="text-sm text-gray-700">Đồng nghiệp</span>
                     </label>
                     <label class="flex items-center cursor-pointer">
                       <input
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <div
                         class="ml-2 w-3 h-3 rounded-full bg-orange-500 mr-3"
-                      ></div>
+                      />
                       <span class="text-sm text-gray-700">Công việc</span>
                     </label>
                     <label class="flex items-center cursor-pointer">
                       <input
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <div
                         class="ml-2 w-3 h-3 rounded-full bg-blue-500 mr-3"
-                      ></div>
+                      />
                       <span class="text-sm text-gray-700">Trả lời sau</span>
                     </label>
                     <label class="flex items-center cursor-pointer">
                       <input
                         type="checkbox"
                         class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
+                      >
                       <div
                         class="ml-2 w-3 h-3 rounded-full bg-gray-800 mr-3"
-                      ></div>
-                      <span class="text-sm text-gray-700"
-                        >Tin nhắn từ người lạ</span
-                      >
+                      />
+                      <span class="text-sm text-gray-700">Tin nhắn từ người lạ</span>
                     </label>
                   </div>
                 </div>
@@ -643,13 +638,13 @@ onUnmounted(() => {
                         stroke-linejoin="round"
                         stroke-width="2"
                         d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                      ></path>
+                      />
                       <path
                         stroke-linecap="round"
                         stroke-linejoin="round"
                         stroke-width="2"
                         d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                      ></path>
+                      />
                     </svg>
                     Quản lý thể phân loại
                   </button>
@@ -682,15 +677,15 @@ onUnmounted(() => {
                 >
                   <img
                     :src="
-                      conversation.avatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        conversation.name
-                      )}&background=random`
+                      conversation.avatar
+                        || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          conversation.name,
+                        )}&background=random`
                     "
                     :alt="conversation.name"
                     class="w-full h-full object-cover"
                     @error="handleImageError($event, conversation.name)"
-                  />
+                  >
                 </div>
                 <div
                   v-if="conversation.online"
@@ -750,15 +745,15 @@ onUnmounted(() => {
               >
                 <img
                   :src="
-                    activeConversation.avatar ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                      activeConversation.name
-                    )}&background=random`
+                    activeConversation.avatar
+                      || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                        activeConversation.name,
+                      )}&background=random`
                   "
                   :alt="activeConversation.name"
                   class="w-full h-full object-cover"
                   @error="handleImageError($event, activeConversation.name)"
-                />
+                >
               </div>
               <div
                 v-if="activeConversation.online"
@@ -790,6 +785,7 @@ onUnmounted(() => {
             </button>
             <button
               class="w-10 h-10 flex items-center justify-center rounded-lg bg-transparent hover:bg-neutral-100 text-text-muted hover:text-text-secondary transition-colors"
+              @click="showFunctionA"
             >
               <svg
                 width="40"
@@ -810,13 +806,13 @@ onUnmounted(() => {
 
             <button
               class="w-10 h-10 flex items-center justify-center rounded-lg bg-transparent hover:bg-neutral-100 text-text-muted hover:text-text-secondary transition-colors"
+              @click="showFunctionB"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
-  <path d="M12 13C12.5523 13 13 12.5523 13 12C13 11.4477 12.5523 11 12 11C11.4477 11 11 11.4477 11 12C11 12.5523 11.4477 13 12 13Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 6C12.5523 6 13 5.55228 13 5C13 4.44772 12.5523 4 12 4C11.4477 4 11 4.44772 11 5C11 5.55228 11.4477 6 12 6Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 20C12.5523 20 13 19.5523 13 19C13 18.4477 12.5523 18 12 18C11.4477 18 11 18.4477 11 19C11 19.5523 11.4477 20 12 20Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-
+                <path d="M12 13C12.5523 13 13 12.5523 13 12C13 11.4477 12.5523 11 12 11C11.4477 11 11 11.4477 11 12C11 12.5523 11.4477 13 12 13Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M12 6C12.5523 6 13 5.55228 13 5C13 4.44772 12.5523 4 12 4C11.4477 4 11 4.44772 11 5C11 5.55228 11.4477 6 12 6Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M12 20C12.5523 20 13 19.5523 13 19C13 18.4477 12.5523 18 12 18C11.4477 18 11 18.4477 11 19C11 19.5523 11.4477 20 12 20Z" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
             </button>
           </div>
         </div>
@@ -847,15 +843,15 @@ onUnmounted(() => {
             >
               <img
                 :src="
-                  message.avatar ||
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                    message.senderName
-                  )}&background=random`
+                  message.avatar
+                    || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                      message.senderName,
+                    )}&background=random`
                 "
                 :alt="message.senderName"
                 class="w-full h-full object-cover"
                 @error="handleImageError($event, message.senderName)"
-              />
+              >
             </div>
 
             <div
@@ -906,14 +902,11 @@ onUnmounted(() => {
                 class="flex items-center gap-1 mt-1 text-xs text-text-muted"
               >
                 <span v-if="message.status === 'sent'">Sent</span>
-                <span v-else-if="message.status === 'delivered'"
-                  >Delivered</span
-                >
+                <span v-else-if="message.status === 'delivered'">Delivered</span>
                 <span
                   v-else-if="message.status === 'read'"
                   class="text-brand-500"
-                  >Read</span
-                >
+                >Read</span>
               </div>
             </div>
           </div>
@@ -936,12 +929,12 @@ onUnmounted(() => {
                 </template>
                 <v-list>
                   <v-list-item clickable>
-                    <v-list-item-icon
-                      ><v-icon name="folder_open"
-                    /></v-list-item-icon>
-                    <v-list-item-content
-                      >Choose from Library</v-list-item-content
-                    >
+                    <v-list-item-icon>
+                      <v-icon name="folder_open" />
+                    </v-list-item-icon>
+                    <v-list-item-content>
+                      Choose from Library
+                    </v-list-item-content>
                   </v-list-item>
 
                   <v-list-item clickable>
@@ -1022,13 +1015,8 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-
-
   </private-view>
 </template>
-
-
-
 
 <style scoped>
 @import "../styles/tailwind.css";
@@ -1088,5 +1076,21 @@ onUnmounted(() => {
 .private-view aside .notifications-preview {
   display: none !important;
 }
-</style>
+.my-sidebar-detail {
+  background: #f7f7f7   !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07) !important;
+}
 
+.page-description {
+  color: #333;
+  font-size: 15px;
+  margin: 8px 0 0 0;
+}
+
+.sidebar-detail[icon="info"] {
+  border-left: 3px solid #0076ff !important;
+}
+</style>
+a
