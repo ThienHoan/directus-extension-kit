@@ -1,7 +1,127 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { useApi } from '@directus/extensions-sdk'
 import oliviaAvatar from '../../public/avatars/olivia-avatar.png'
+import { useFileUpload } from './composables/useFileUpload'
 
+
+// State
+const activeDialog = ref<'upload' | 'choose' | 'url' | null>(null);
+const selectedFile = ref<any>(null);
+const importUrl = ref('');
+const importing = ref(false);
+const folder = ref<string | undefined>();
+
+// Computed
+const isValidURL = computed(() => {
+  if (!importUrl.value) return false;
+  try {
+    new URL(importUrl.value);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+// Methods
+function onUpload(fileData: any) {
+  // v-upload returns uploaded file info from Directus
+  // Add to pending attachments instead of sending immediately
+  if (fileData) {
+    const files = Array.isArray(fileData) ? fileData : [fileData];
+    
+    // Create file attachments from uploaded files
+    const fileAttachments: FileAttachment[] = files.map(file => ({
+      id: file.id,
+      filename: file.filename_download || file.title,
+      type: file.type,
+      size: file.filesize,
+      url: `http://localhost:8055/assets/${file.id}`,
+      width: file.width,
+      height: file.height
+    }));
+    
+    // Add to pending attachments
+    pendingAttachments.value.push(...fileAttachments);
+  }
+  
+  activeDialog.value = null;
+}
+
+async function onSelectFromLibrary(fileIds: any) {
+  try {
+    // Handle Proxy Array - map through to get values
+    const ids: string[] = [];
+    if (Array.isArray(fileIds) && fileIds.length > 0) {
+      // Access elements directly to avoid Proxy issues
+      for (let i = 0; i < fileIds.length; i++) {
+        const fileId = fileIds[i];
+        if (fileId) {
+          ids.push(fileId);
+        }
+      }
+    } else if (fileIds) {
+      ids.push(fileIds);
+    }
+    
+    if (ids.length === 0) {
+      return;
+    }
+    
+    // Fetch file details from Directus
+    const filePromises = ids.map(id => api.get(`/files/${id}`));
+    const responses = await Promise.all(filePromises);
+    const files = responses.map(res => res.data.data);
+    
+    // Add to pending attachments instead of sending immediately
+    const fileAttachments: FileAttachment[] = files.map(file => ({
+      id: file.id,
+      filename: file.filename_download,
+      type: file.type,
+      size: file.filesize,
+      url: `http://localhost:8055/assets/${file.id}`,
+      width: file.width,
+      height: file.height
+    }));
+    
+    // Add to pending attachments
+    pendingAttachments.value.push(...fileAttachments);
+    
+    activeDialog.value = null;
+  } catch (error) {
+    console.error('Error loading files from library:', error);
+  }
+}
+
+async function importFromURL() {
+  if (!isValidURL.value || importing.value) return;
+  
+  importing.value = true;
+  
+  try {
+    const response = await fetch('/api/files/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: importUrl.value,
+        folder: folder.value,
+      }),
+    });
+    
+    if (!response.ok) throw new Error('Import failed');
+    
+    const data = await response.json();
+    selectedFile.value = data.data;
+    importUrl.value = '';
+    activeDialog.value = null;
+    
+  } catch (error) {
+    console.error('Import error:', error);
+    alert('Failed to import file from URL');
+  } finally {
+    importing.value = false;
+  }
+}
 const currentFunction = ref(null)
 
 function showFunctionA() {
@@ -35,6 +155,17 @@ interface Group {
   createdBy: string
 }
 
+interface FileAttachment {
+  id: string
+  filename: string
+  type: string
+  size: number
+  url: string
+  thumbnail?: string
+  width?: number
+  height?: number
+}
+
 interface Message {
   id: string
   direction: 'in' | 'out'
@@ -43,10 +174,12 @@ interface Message {
   time: string
   avatar?: string
   status?: 'sent' | 'delivered' | 'read'
-  type?: 'system' | 'user' // For system messages like group creation
+  type?: 'system' | 'user' | 'file' // For system messages, user messages, and file messages
+  files?: FileAttachment[] // For file attachments
 }
 
 // Reactive data
+const api = useApi()
 const messageSearchQuery = ref('') // For searching messages in sidebar
 const conversationSearchQuery = ref('') // For searching conversations in navigation
 const messageText = ref('')
@@ -57,6 +190,23 @@ const highlightedMessageId = ref<string | null>(null) // For highlighting select
 const showMembersDialog = ref(false) // For showing the members selection dialog
 const memberSearchQuery = ref('') // For searching members in the dialog
 const selectedMembers = ref<string[]>([]) // For tracking selected member IDs
+
+// File upload composable
+const {
+  uploadFiles,
+  getFileUrl,
+  getThumbnailUrl,
+  formatFileSize,
+  getFileIcon,
+  uploadProgress,
+  isUploading,
+  FILE_CONFIGS,
+  MAX_FILES
+} = useFileUpload()
+const fileInput = ref<HTMLInputElement | null>(null)
+const selectedFiles = ref<File[]>([])
+const showFilePreviewDialog = ref(false) // Dialog to preview selected files before upload
+const pendingAttachments = ref<FileAttachment[]>([]) // Files ready to send with message
 
 // Filter states
 const filterOptions = ref({
@@ -442,19 +592,20 @@ const searchFilteredMessages = computed(() => {
   }
 
   const query = messageSearchQuery.value.toLowerCase().trim()
-  
-  return messages.value.filter(message => 
-    message.text.toLowerCase().includes(query)
+
+  return messages.value.filter(message =>
+    message.text.toLowerCase().includes(query),
   ).map(message => ({
     ...message,
-    highlightedText: highlightSearchText(message.text, messageSearchQuery.value)
+    highlightedText: highlightSearchText(message.text, messageSearchQuery.value),
   }))
 })
 
 // Helper function to highlight search text
 function highlightSearchText(text: string, searchTerm: string): string {
-  if (!searchTerm.trim()) return text
-  
+  if (!searchTerm.trim())
+    return text
+
   const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
   return text.replace(regex, '<mark class="bg-yellow-200 px-1 rounded">$1</mark>')
 }
@@ -508,8 +659,65 @@ function applyFilters() {
   showFilterDropdown.value = false
 }
 
-function sendMessage() {
-  if (!messageText.value.trim())
+function sendMessage(fileAttachments?: FileAttachment[]) {
+  // Use pending attachments if no attachments passed
+  const attachments = fileAttachments || (pendingAttachments.value.length > 0 ? [...pendingAttachments.value] : undefined)
+  
+  // If only sending files without text
+  if (attachments && attachments.length > 0 && !messageText.value.trim()) {
+    const newMessage: Message = {
+      id: Date.now().toString(),
+      direction: 'in',
+      text: '', // Empty text for file-only messages
+      senderName: 'Nha Khuyen',
+      time: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      status: 'sent',
+      type: 'file',
+      files: attachments,
+    }
+
+    // Add message to appropriate conversation
+    const isGroup = activeConversationId.value.startsWith('group_')
+
+    if (isGroup) {
+      if (!groupMessages.value[activeConversationId.value]) {
+        groupMessages.value[activeConversationId.value] = []
+      }
+      groupMessages.value[activeConversationId.value].push(newMessage)
+
+      // Update group's last message
+      const group = groups.value.find(g => g.id === activeConversationId.value)
+      if (group) {
+        group.lastMessage = '📎 File'
+        group.timestamp = newMessage.time
+      }
+    }
+    else {
+      messages.value.push(newMessage)
+
+      // Update conversation's last message
+      const conversation = conversations.value.find(c => c.id === activeConversationId.value)
+      if (conversation) {
+        conversation.lastMessage = '📎 File'
+        conversation.timestamp = newMessage.time
+      }
+    }
+
+    // Clear pending attachments after sending
+    pendingAttachments.value = []
+    
+    // Scroll to bottom after sending
+    nextTick(() => {
+      scrollToBottom()
+    })
+    return
+  }
+
+  // Original text message logic (can have attachments or not)
+  if (!messageText.value.trim() && (!attachments || attachments.length === 0))
     return
 
   const newMessage: Message = {
@@ -522,26 +730,28 @@ function sendMessage() {
       minute: '2-digit',
     }),
     status: 'sent',
+    files: attachments, // Include attachments if provided
   }
 
   // Add message to appropriate conversation
   const isGroup = activeConversationId.value.startsWith('group_')
-  
+
   if (isGroup) {
     if (!groupMessages.value[activeConversationId.value]) {
       groupMessages.value[activeConversationId.value] = []
     }
     groupMessages.value[activeConversationId.value].push(newMessage)
-    
+
     // Update group's last message
     const group = groups.value.find(g => g.id === activeConversationId.value)
     if (group) {
       group.lastMessage = newMessage.text
       group.timestamp = newMessage.time
     }
-  } else {
+  }
+  else {
     messages.value.push(newMessage)
-    
+
     // Update conversation's last message
     const conversation = conversations.value.find(c => c.id === activeConversationId.value)
     if (conversation) {
@@ -549,8 +759,9 @@ function sendMessage() {
       conversation.timestamp = newMessage.time
     }
   }
-  
+
   messageText.value = ''
+  pendingAttachments.value = [] // Clear pending attachments after sending
 
   nextTick(() => {
     scrollToBottom()
@@ -563,6 +774,146 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`
 }
 
+// File Upload Functions
+function triggerFileInput() {
+  // Show dialog first instead of directly opening file picker
+  activeDialog.value = 'upload'
+}
+
+function openFilePicker() {
+  // This function will open the actual file picker
+  fileInput.value?.click()
+}
+
+function removePendingAttachment(index: number) {
+  pendingAttachments.value.splice(index, 1)
+}
+
+function handleFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    const files = Array.from(target.files)
+    selectedFiles.value = files
+    
+    // Close upload dialog and show preview dialog
+    activeDialog.value = null
+    showFilePreviewDialog.value = true
+  }
+}
+
+function removeFileFromPreview(index: number) {
+  selectedFiles.value.splice(index, 1)
+  
+  // Close dialog if no files left
+  if (selectedFiles.value.length === 0) {
+    showFilePreviewDialog.value = false
+  }
+}
+
+function cancelFileUpload() {
+  selectedFiles.value = []
+  showFilePreviewDialog.value = false
+  
+  // Reset file input
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+async function confirmAndUploadFiles() {
+  showFilePreviewDialog.value = false
+  await uploadSelectedFiles()
+}
+
+async function uploadSelectedFiles() {
+  if (selectedFiles.value.length === 0) return
+
+  try {
+    const conversationId = activeConversationId.value
+    
+    // Upload files
+    const result = await uploadFiles(selectedFiles.value, conversationId)
+
+    // Handle successful uploads
+    if (result.success.length > 0) {
+      // Create file message for each uploaded file
+      result.success.forEach((uploadedFile) => {
+        const fileMessage: Message = {
+          id: `${Date.now()}_${Math.random()}`,
+          direction: 'in',
+          text: '', // No text for file-only messages
+          senderName: 'Nha Khuyen',
+          time: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          status: 'sent',
+          type: 'file',
+          files: [{
+            id: uploadedFile.id,
+            filename: uploadedFile.filename_download,
+            type: uploadedFile.type,
+            size: uploadedFile.filesize,
+            url: getFileUrl(uploadedFile.id),
+            thumbnail: uploadedFile.type.startsWith('image/') 
+              ? getThumbnailUrl(uploadedFile.id, 400, 400)
+              : undefined,
+            width: uploadedFile.width,
+            height: uploadedFile.height
+          }]
+        }
+
+        // Add message to appropriate conversation
+        const isGroup = activeConversationId.value.startsWith('group_')
+
+        if (isGroup) {
+          if (!groupMessages.value[activeConversationId.value]) {
+            groupMessages.value[activeConversationId.value] = []
+          }
+          groupMessages.value[activeConversationId.value].push(fileMessage)
+
+          // Update group's last message
+          const group = groups.value.find(g => g.id === activeConversationId.value)
+          if (group) {
+            group.lastMessage = `📎 ${uploadedFile.filename_download}`
+            group.timestamp = fileMessage.time
+          }
+        } else {
+          messages.value.push(fileMessage)
+
+          // Update conversation's last message
+          const conversation = conversations.value.find(c => c.id === activeConversationId.value)
+          if (conversation) {
+            conversation.lastMessage = `📎 ${uploadedFile.filename_download}`
+            conversation.timestamp = fileMessage.time
+          }
+        }
+      })
+
+      // Scroll to bottom to show new messages
+      nextTick(() => {
+        scrollToBottom()
+      })
+    }
+
+    // Handle errors
+    if (result.errors.length > 0) {
+      console.error('Upload errors:', result.errors)
+      // TODO: Show error notification to user
+    }
+
+  } catch (error) {
+    console.error('Error uploading files:', error)
+    // TODO: Show error notification to user
+  } finally {
+    // Clear selected files
+    selectedFiles.value = []
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
+  }
+}
+
 function scrollToBottom() {
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -572,20 +923,20 @@ function scrollToBottom() {
 function navigateToMessage(messageId: string) {
   // Keep the search sidebar open - don't close it
   // currentFunction.value = null (removed this line)
-  
+
   // Highlight the message
   highlightedMessageId.value = messageId
-  
+
   // Wait for next tick to ensure DOM is updated
   nextTick(() => {
     const messageElement = document.querySelector(`[data-message-id="${messageId}"]`)
     if (messageElement && messagesContainer.value) {
       // Scroll to the message
-      messageElement.scrollIntoView({ 
-        behavior: 'smooth', 
-        block: 'center' 
+      messageElement.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
       })
-      
+
       // Remove highlight after 3 seconds
       setTimeout(() => {
         highlightedMessageId.value = null
@@ -642,7 +993,8 @@ function toggleMemberSelection(memberId: string) {
   const index = selectedMembers.value.indexOf(memberId)
   if (index > -1) {
     selectedMembers.value.splice(index, 1)
-  } else {
+  }
+  else {
     selectedMembers.value.push(memberId)
   }
 }
@@ -665,9 +1017,9 @@ const allConversations = computed(() => {
     online: false, // Groups don't have online status
     unreadCount: group.unreadCount,
     type: 'group' as const,
-    members: group.members
+    members: group.members,
   }))
-  
+
   return [...groupsAsConversations, ...conversations.value]
 })
 
@@ -675,19 +1027,19 @@ const allConversations = computed(() => {
 const currentMessages = computed(() => {
   // Check if current conversation is a group
   const isGroup = activeConversationId.value.startsWith('group_')
-  
+
   if (isGroup) {
     return groupMessages.value[activeConversationId.value] || []
   }
-  
+
   // Return individual conversation messages (default messages for now)
   return messages.value
 })
 
 // Get selected member objects
 const selectedMemberObjects = computed(() => {
-  return conversations.value.filter(member => 
-    selectedMembers.value.includes(member.id)
+  return conversations.value.filter(member =>
+    selectedMembers.value.includes(member.id),
   )
 })
 
@@ -699,18 +1051,18 @@ function createGroup() {
   // Get selected member names for group name
   const memberNames = selectedMemberObjects.value.map(member => member.name)
   const currentUserName = 'Nha Khuyen' // In real app, get from auth context
-  
+
   // Create group
   const newGroupId = `group_${Date.now()}`
-  const groupName = memberNames.length <= 2 
+  const groupName = memberNames.length <= 2
     ? memberNames.join(', ')
     : `${memberNames.slice(0, 2).join(', ')} and ${memberNames.length - 2} others`
-  
+
   const now = new Date()
-  const timestamp = now.toLocaleTimeString('en-US', { 
-    hour: '2-digit', 
-    minute: '2-digit', 
-    hour12: true 
+  const timestamp = now.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
   })
 
   const newGroup: Group = {
@@ -722,7 +1074,7 @@ function createGroup() {
     unreadCount: 0,
     type: 'group',
     createdAt: now.toISOString(),
-    createdBy: currentUserName
+    createdBy: currentUserName,
   }
 
   // Add group to groups array
@@ -735,7 +1087,7 @@ function createGroup() {
     text: `${memberNames.join(', ')} were added to the group by you`,
     senderName: 'System',
     time: timestamp,
-    type: 'system'
+    type: 'system',
   }
 
   // Store group messages (in real app, this would be in a messages store)
@@ -746,12 +1098,10 @@ function createGroup() {
 
   // Switch to the new group conversation
   activeConversationId.value = newGroupId
-  
+
   // Close dialog and reset selection
   closeMembersDialog()
   selectedMembers.value = []
-  
-  console.log('Created group:', newGroup)
 }
 
 // Filtered members for search
@@ -759,9 +1109,9 @@ const filteredMembers = computed(() => {
   if (!memberSearchQuery.value.trim()) {
     return conversations.value
   }
-  
+
   return conversations.value.filter(member =>
-    member.name.toLowerCase().includes(memberSearchQuery.value.toLowerCase())
+    member.name.toLowerCase().includes(memberSearchQuery.value.toLowerCase()),
   )
 })
 
@@ -799,8 +1149,6 @@ onUnmounted(() => {
       <sidebar-detail v-if="currentFunction === 'A'" icon="search" class="my-sidebar-detail" title="Search for messages" close>
         <!-- Search and Filter Section -->
 
-
-        
         <div class="search-container space-y-4">
           <!-- Search Input với style mới -->
           <div class="search-input-section">
@@ -810,73 +1158,73 @@ onUnmounted(() => {
                 type="text"
                 placeholder="Search in conversation"
                 class="w-full pl-9 pr-3 py-4 text-sm bg-gray-50 rounded-xl focus:outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 placeholder-gray-500"
-              />
+              >
             </div>
           </div>
 
           <div class="flex items-center justify-between">
-          <h1 class="text-lg text-gray-900">Filter: </h1>
-            
+            <h1 class="text-lg text-gray-900">
+              Filter:
+            </h1>
+
             <div
               v-if="showFilterDropdown"
               class="fixed top-13 left-100 w-56 mt-2 bg-white border-neutral-200 rounded-lg shadow-xl z-[9999]"
-            >
-              
+            />
+            <div class="relative filter-dropdown-container">
+              <button
+                class="flex items-center gap-1 px-2 py-1 text-[14px] font-medium leading-normal not-italic rounded-[var(--Button-Radius-button,6px)] !border !border-solid !border-[var(--border-normal,#D3DAE4)] text-[var(--foreground-normal,#4F5464)] font-[Inter] transition-colors"
+                :class="{ 'bg-neutral-100': showFilterDropdown }"
+                @click="handleFilter"
+              >
+                <span>Sender</span>
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  :class="{ 'rotate-180': showFilterDropdown }"
+                  class="transition-transform duration-200"
+                >
+                  <path
+                    d="M19.92 8.94995L13.4 15.47C12.63 16.24 11.37 16.24 10.6 15.47L4.07996 8.94995"
+                    stroke="#4F5464"
+                    stroke-width="2"
+                    stroke-miterlimit="10"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
             </div>
-          <div class="relative filter-dropdown-container">
-            <button
-              class="flex items-center gap-1 px-2 py-1 text-[14px] font-medium leading-normal not-italic rounded-[var(--Button-Radius-button,6px)] !border !border-solid !border-[var(--border-normal,#D3DAE4)] text-[var(--foreground-normal,#4F5464)] font-[Inter] transition-colors"
-              :class="{ 'bg-neutral-100': showFilterDropdown }"
-              @click="handleFilter"
-            >
-              <span>Sender</span>
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                :class="{ 'rotate-180': showFilterDropdown }"
-                class="transition-transform duration-200"
+            <div class="relative filter-dropdown-container">
+              <button
+                class="flex items-center gap-1 px-4 py-1 text-[14px] font-medium leading-normal not-italic rounded-[var(--Button-Radius-button,6px)] !border !border-solid !border-[var(--border-normal,#D3DAE4)] text-[var(--foreground-normal,#4F5464)] font-[Inter] transition-colors"
+                :class="{ 'bg-neutral-100': showFilterDropdown }"
+                @click="handleFilter"
               >
-                <path
-                  d="M19.92 8.94995L13.4 15.47C12.63 16.24 11.37 16.24 10.6 15.47L4.07996 8.94995"
-                  stroke="#4F5464"
-                  stroke-width="2"
-                  stroke-miterlimit="10"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
-          <div class="relative filter-dropdown-container">
-            <button
-              class="flex items-center gap-1 px-4 py-1 text-[14px] font-medium leading-normal not-italic rounded-[var(--Button-Radius-button,6px)] !border !border-solid !border-[var(--border-normal,#D3DAE4)] text-[var(--foreground-normal,#4F5464)] font-[Inter] transition-colors"
-              :class="{ 'bg-neutral-100': showFilterDropdown }"
-              @click="handleFilter"
-            >
-              <span>Date</span>
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                :class="{ 'rotate-180': showFilterDropdown }"
-                class="transition-transform duration-200"
-              >
-                <path
-                  d="M19.92 8.94995L13.4 15.47C12.63 16.24 11.37 16.24 10.6 15.47L4.07996 8.94995"
-                  stroke="#4F5464"
-                  stroke-width="2"
-                  stroke-miterlimit="10"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
+                <span>Date</span>
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  :class="{ 'rotate-180': showFilterDropdown }"
+                  class="transition-transform duration-200"
+                >
+                  <path
+                    d="M19.92 8.94995L13.4 15.47C12.63 16.24 11.37 16.24 10.6 15.47L4.07996 8.94995"
+                    stroke="#4F5464"
+                    stroke-width="2"
+                    stroke-miterlimit="10"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
 
           <!-- Search Results Summary -->
@@ -892,31 +1240,37 @@ onUnmounted(() => {
           <!-- No Search Query State -->
           <div v-if="!messageSearchQuery.trim()" class="text-center py-8">
             <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
-            <p class="text-gray-500 text-sm">Enter a search term to find messages</p>
+            <p class="text-gray-500 text-sm">
+              Enter a search term to find messages
+            </p>
           </div>
 
           <!-- No Results State -->
           <div v-else-if="searchFilteredMessages.length === 0" class="text-center py-8">
             <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 515.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.291.974-5.709 2.291"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 515.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.291.974-5.709 2.291" />
             </svg>
-            <p class="text-gray-500 text-sm">No messages found for "{{ messageSearchQuery }}"</p>
+            <p class="text-gray-500 text-sm">
+              No messages found for "{{ messageSearchQuery }}"
+            </p>
           </div>
 
           <!-- Search Results -->
           <div v-else class="search-results space-y-3">
-            <div 
-              v-for="message in searchFilteredMessages" 
+            <div
+              v-for="message in searchFilteredMessages"
               :key="message.id"
               class="result-item cursor-pointer transition-all"
               title="Click to navigate to this message"
               @click="navigateToMessage(message.id)"
             >
               <div class="flex items-start gap-3">
-                <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold text-white"
-                     :class="message.senderName === 'Olivia Rhye' ? 'bg-pink-500' : 'bg-gray-500'">
+                <div
+                  class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold text-white"
+                  :class="message.senderName === 'Olivia Rhye' ? 'bg-pink-500' : 'bg-gray-500'"
+                >
                   {{ getInitials(message.senderName) }}
                 </div>
                 <div class="flex-1 min-w-0">
@@ -924,8 +1278,7 @@ onUnmounted(() => {
                     <span class="text-sm font-semibold text-gray-900">{{ message.senderName }}</span>
                     <span class="text-xs text-gray-500">{{ message.time }}</span>
                   </div>
-                  <p class="text-sm text-gray-600 leading-relaxed" v-html="message.highlightedText">
-                  </p>
+                  <p class="text-sm text-gray-600 leading-relaxed" v-html="message.highlightedText" />
                 </div>
               </div>
             </div>
@@ -944,7 +1297,7 @@ onUnmounted(() => {
         <div class="relative">
           <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
             <svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
           <input
@@ -1148,41 +1501,31 @@ onUnmounted(() => {
             @click="selectConversation(conversation.id)"
           >
             <div class="flex items-center gap-2 flex-1 min-w-0">
-              <!-- Group Avatar (Multiple small avatars) -->
-              <div v-if="conversation.type === 'group'" class="relative inline-block">
-                <div class="w-13 h-13 flex items-center justify-center relative">
-                  <div class="flex flex-col gap-0.5">
-                    <div class="flex gap-0.5">
-                      <div
-                        v-for="(memberId, index) in conversation.members?.slice(0, 2) || []"
-                        :key="memberId"
-                        class="w-[15px] h-[15px] relative rounded-full overflow-hidden bg-neutral-100 border border-white"
-                        :style="{ zIndex: conversation.members?.length - index }"
-                      >
-                        <img
-                          :src="conversations.find(c => c.id === memberId)?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === memberId)?.name || 'User')}&background=random&size=16`"
-                          :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
-                          class="w-full h-full object-cover"
-                        >
-                      </div>
-                    </div>
-                    <div class="flex gap-0.5">
-                      <div
-                        v-for="memberId in conversation.members?.slice(2, 3) || []"
-                        :key="memberId"
-                        class="w-[30px] h-[30px] relative rounded-full overflow-hidden bg-neutral-100 border border-white ml-2"
-                      >
-                        <img
-                          :src="conversations.find(c => c.id === memberId)?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === memberId)?.name || 'User')}&background=random&size=16`"
-                          :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
-                          class="w-full h-full object-cover"
-                        >
-                      </div>
-                    </div>
-                  </div>
+              <!-- Group Avatar (Tam giác 2 trên - 1 dưới) -->
+              <div v-if="conversation.type === 'group'" class="relative w-[32px] h-[32px] inline-block">
+                <div
+                  v-for="(memberId, index) in conversation.members?.slice(0, 3) || []"
+                  :key="memberId"
+                  class="absolute w-[16px] h-[16px] rounded-full overflow-hidden bg-neutral-100 border border-white"
+                  :class="{
+                    'top-0 left-[-1px]': index === 0, // Avatar 1: trên trái
+                    'top-0 right-[-1px]': index === 1, // Avatar 2: trên phải
+                    'bottom-0 left-1/2 -translate-x-1/2': index === 2, // Avatar 3: dưới giữa
+                  }"
+                >
+                  <img
+                    :src="
+                      conversations.find(c => c.id === memberId)?.avatar
+                        || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          conversations.find(c => c.id === memberId)?.name || 'User',
+                        )}&background=random&size=16`
+                    "
+                    :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
+                    class="w-full h-full object-cover"
+                  >
                 </div>
               </div>
-              
+
               <!-- Individual Conversation Avatar -->
               <div v-else class="relative inline-block">
                 <div
@@ -1196,7 +1539,7 @@ onUnmounted(() => {
                         )}&background=random`
                     "
                     :alt="conversation.name"
-                    class="w-full h-full object-cover"
+                    class="w-10 h-10 object-cover"
                     @error="handleImageError($event, conversation.name)"
                   >
                 </div>
@@ -1253,40 +1596,35 @@ onUnmounted(() => {
         <div class="flex items-center justify-between w-full">
           <div class="flex items-center gap-4">
             <!-- Group Header Avatar -->
-            <div v-if="activeConversation.type === 'group'" class="relative inline-block">
-              <div class="w-14 h-14 flex items-center justify-center relative">
-                <div class="flex flex-col gap-1">
-                  <div class="flex gap-1">
-                    <div
-                      v-for="(memberId, index) in activeConversation.members?.slice(0, 2) || []"
-                      :key="memberId"
-                      class="w-[18px] h-[18px] relative rounded-full overflow-hidden bg-neutral-100 border border-white"
-                      :style="{ zIndex: activeConversation.members?.length - index }"
-                    >
-                      <img
-                        :src="conversations.find(c => c.id === memberId)?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === memberId)?.name || 'User')}&background=random&size=18`"
-                        :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
-                        class="w-full h-full object-cover"
-                      >
-                    </div>
-                  </div>
-                  <div class="flex gap-1">
-                    <div
-                      v-for="memberId in activeConversation.members?.slice(2, 3) || []"
-                      :key="memberId"
-                      class="w-[18px] h-[18px] relative rounded-full overflow-hidden bg-neutral-100 border border-white ml-4"
-                    >
-                      <img
-                        :src="conversations.find(c => c.id === memberId)?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === memberId)?.name || 'User')}&background=random&size=18`"
-                        :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
-                        class="w-full h-full object-cover"
-                      >
-                    </div>
-                  </div>
-                </div>
+            <!-- Group Header Avatar -->
+            <div
+              v-if="activeConversation.type === 'group'"
+              class="relative inline-block w-[36px] h-[36px]"
+            >
+              <!-- Avatar 1 -->
+              <div
+                v-for="(memberId, index) in activeConversation.members?.slice(0, 3) || []"
+                :key="memberId"
+                class="absolute w-[18px] h-[18px] rounded-full overflow-hidden bg-neutral-100 border border-white"
+                :class="{
+                  'top-0 left-[-1px]': index === 0, // Trên - Trái
+                  'top-0 right-[-1px]': index === 1, // Trên - Phải
+                  'bottom-0 left-1/2 -translate-x-1/2': index === 2, // Dưới - Giữa
+                }"
+              >
+                <img
+                  :src="
+                    conversations.find(c => c.id === memberId)?.avatar
+                      || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                        conversations.find(c => c.id === memberId)?.name || 'User',
+                      )}&background=random&size=18`
+                  "
+                  :alt="conversations.find(c => c.id === memberId)?.name || 'User'"
+                  class="w-full h-full object-cover"
+                >
               </div>
             </div>
-            
+
             <!-- Individual Conversation Header Avatar -->
             <div v-else class="relative inline-block">
               <div
@@ -1374,144 +1712,332 @@ onUnmounted(() => {
         ref="messagesContainer"
         class="messages-area"
       >
-        <div 
+        <div
           class="min-h-full flex flex-col justify-end"
           :class="{ 'justify-center': currentMessages.length <= 1 }"
         >
           <div class="space-y-1">
-          <div
-            v-for="message in currentMessages"
-            :key="message.id"
-            :data-message-id="message.id"
-            class="flex gap-4 px-8 py-3 transition-all duration-300"
-            :class="[
-              {
-                'justify-center': message.type === 'system',
-                'justify-start': message.direction === 'in' && message.type !== 'system',
-                'justify-end': message.direction === 'out' && message.type !== 'system',
-                'bg-gray-200': highlightedMessageId === message.id,
-              },
-            ]"
-          >            
-            <!-- System Message (Group creation, etc.) -->
-            <div v-if="message.type === 'system'" class="flex flex-col items-center w-full gap-8">
-              <!-- Group Avatar and Names Section -->
-              <div class="flex flex-col items-center gap-1.5">
-                <!-- Large Group Avatar (64x64) -->
-                <div class="w-16 h-16 relative rounded-full overflow-hidden bg-neutral-100 border border-black/8">
-                  <img
-                    :src="activeConversation?.members?.[0] ? conversations.find(c => c.id === activeConversation.members[0])?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === activeConversation.members[0])?.name || 'Group')}&background=random&size=64` : `https://ui-avatars.com/api/?name=Group&background=random&size=64`"
-                    :alt="activeConversation?.name || 'Group'"
-                    class="w-full h-full object-cover"
-                  >
-                </div>
-                
-                <!-- Group Member Names -->
-                <h3 class="text-3xl font-semibold text-black">
-                  {{ activeConversation?.name || 'Group' }}
-                </h3>
-              </div>
-              
-              <!-- Today chip - Figma specs: #E4EAF1 bg, #D3DAE4 border, #344054 text -->
-              <div class="inline-flex items-center h-6 px-1.5 rounded border" 
-                   style="background-color: #E4EAF1; border-color: #D3DAE4;">
-                <span class="text-sm font-medium" style="color: #344054;">Today</span>
-              </div>
-              
-              <!-- System message chip - Figma specs: #F8FAFC bg, #E4E7EC border, #4F5464 text -->
-              <div class="inline-flex items-center h-6 px-1.5 rounded border" 
-                   style="background-color: #F8FAFC; border-color: #E4E7EC;">
-                <span class="text-sm" style="color: #4F5464;">{{ message.text }}</span>
-              </div>
-            </div>
-            
-            <!-- Regular Messages -->
-            <template v-else>
-              <!-- Avatar for incoming messages -->
-              <div
-                v-if="message.direction === 'in'"
-                class="w-14 h-14 relative rounded-full overflow-hidden bg-neutral-100 border border-black/8 flex-shrink-0"
-              >
-                <img
-                  :src="
-                    message.avatar
-                      || `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        message.senderName,
-                      )}&background=random`
-                  "
-                  :alt="message.senderName"
-                  class="w-full h-full object-cover"
-                  @error="handleImageError($event, message.senderName)"
-                >
-              </div>
-
             <div
-              class="flex flex-col max-w-[70%]"
+              v-for="message in currentMessages"
+              :key="message.id"
+              :data-message-id="message.id"
+              class="flex gap-4 px-8 py-3 transition-all duration-300"
               :class="[
                 {
-                  'items-start': message.direction === 'in',
-                  'items-end': message.direction === 'out',
+                  'justify-center': message.type === 'system',
+                  'justify-start': message.type !== 'system',
+                  'bg-gray-200': highlightedMessageId === message.id,
                 },
               ]"
             >
-              <!-- Message header with name and time -->
-              <div
-                class="flex items-center gap-2 mb-2"
-                :class="[
-                  {
-                    'flex-row ': message.direction === 'in',
-                    'flex-row-reverse': message.direction === 'out',
-                  },
-                ]"
-              >
-                <span class="font-semibold text-sm text-text-secondary">
-                  {{ message.senderName }}
-                </span>
-                <span class="text-xs text-text-muted">
-                  {{ message.time }}
-                </span>
+              <!-- System Message (Group creation, etc.) -->
+              <div v-if="message.type === 'system'" class="flex flex-col items-center w-full gap-8">
+                <!-- Group Avatar and Names Section -->
+                <div class="flex flex-col items-center gap-1.5">
+                  <!-- Large Group Avatar (64x64) -->
+                  <div class="w-16 h-16 relative rounded-full overflow-hidden bg-neutral-100 border border-black/8">
+                    <img
+                      :src="activeConversation?.members?.[0] ? conversations.find(c => c.id === activeConversation.members[0])?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(conversations.find(c => c.id === activeConversation.members[0])?.name || 'Group')}&background=random&size=64` : `https://ui-avatars.com/api/?name=Group&background=random&size=64`"
+                      :alt="activeConversation?.name || 'Group'"
+                      class="w-full h-full object-cover"
+                    >
+                  </div>
+
+                  <!-- Group Member Names -->
+                  <h3 class="text-3xl font-semibold text-black">
+                    {{ activeConversation?.name || 'Group' }}
+                  </h3>
+                </div>
+
+                <!-- Today chip - Figma specs: #E4EAF1 bg, #D3DAE4 border, #344054 text -->
+                <div
+                  class="inline-flex items-center h-6 px-1.5 rounded border"
+                  style="background-color: #E4EAF1; border-color: #D3DAE4;"
+                >
+                  <span class="text-sm font-medium" style="color: #344054;">Today</span>
+                </div>
+
+                <!-- System message chip - Figma specs: #F8FAFC bg, #E4E7EC border, #4F5464 text -->
+                <div
+                  class="inline-flex items-center h-6 px-1.5 rounded border"
+                  style="background-color: #F8FAFC; border-color: #E4E7EC;"
+                >
+                  <span class="text-sm" style="color: #4F5464;">{{ message.text }}</span>
+                </div>
               </div>
 
-              <!-- Message content -->
-              <div
-                class="rounded-lg max-w-full break-words text-sm text-text-secondary leading-relaxed"
-                :class="[
-                  {
-                    '  border-neutral-200': message.direction === 'in',
-                    'bg-brand-500 text-white': message.direction === 'out',
-                  },
-                ]"
-              >
-                <p class="whitespace-pre-wrap">
-                  {{ message.text }}
-                </p>
-              </div>
+              <!-- Regular Messages -->
+              <template v-else>
+                <!-- Avatar -->
+                <div class="w-14 h-14 relative rounded-full overflow-hidden bg-neutral-100 border border-black/8 flex-shrink-0">
+                  <img
+                    :src="
+                      message.avatar
+                        || `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          message.senderName,
+                        )}&background=random`
+                    "
+                    :alt="message.senderName"
+                    class="w-full h-full object-cover"
+                    @error="handleImageError($event, message.senderName)"
+                  >
+                </div>
 
-              <!-- Message status for outgoing messages -->
-              <div
-                v-if="message.direction === 'out' && message.status"
-                class="flex items-center gap-1 mt-1 text-xs text-text-muted"
-              >
-                <span v-if="message.status === 'sent'">Sent</span>
-                <span v-else-if="message.status === 'delivered'">Delivered</span>
-                <span
-                  v-else-if="message.status === 'read'"
-                  class="text-brand-500"
-                >Read</span>
-              </div>
+                <div class="flex flex-col max-w-[70%]">
+                  <!-- Message header with name and time -->
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="font-semibold text-sm text-text-secondary">
+                      {{ message.senderName }}
+                    </span>
+                    <span class="text-xs text-text-muted">
+                      {{ message.time }}
+                    </span>
+                  </div>
+
+                  <!-- File Attachments -->
+                  <div v-if="message.files && message.files.length > 0" class="flex flex-col gap-2 mb-2">
+                    <div
+                      v-for="file in message.files"
+                      :key="file.id"
+                      class="rounded-lg overflow-hidden bg-neutral-50 border border-neutral-200"
+                    >
+                      <!-- Image Preview -->
+                      <div v-if="file.type && file.type.startsWith('image/')" class="relative group">
+                        <img
+                          :src="file.thumbnail || file.url"
+                          :alt="file.filename"
+                          class="max-w-full h-auto max-h-96 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                          @click="window.open(file.url, '_blank')"
+                        >
+                        <div class="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+                          {{ formatFileSize(Number(file.size)) }}
+                        </div>
+                      </div>
+
+                      <!-- Document/File Card -->
+                      <div v-else class="flex items-center gap-3 p-3">
+                        <div class="w-12 h-12 flex items-center justify-center rounded-lg bg-neutral-100">
+                          <v-icon 
+                            :name="getFileIcon(file.type)" 
+                            class="text-neutral-600"
+                          />
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <div class="font-medium text-sm truncate  text-blue-500">
+                            {{ file.filename }}
+                          </div>
+                          <div class="text-xs text-text-muted">
+                            {{ formatFileSize(file.size) }}
+                          </div>
+                        </div>
+                        <button
+                          class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/10 transition-colors"
+                          @click="window.open(file.url, '_blank')"
+                        >
+                          <v-icon 
+                            name="download" 
+                            class="text-neutral-600"
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Message content (text) -->
+                  <div
+                    v-if="message.text"
+                    class="rounded-lg max-w-full break-words text-sm text-text-secondary leading-relaxed border-neutral-200"
+                  >
+                    <p class="whitespace-pre-wrap">
+                      {{ message.text }}
+                    </p>
+                  </div>
+                </div>
+              </template>
             </div>
-            </template>
           </div>
-        </div>
         </div>
       </div>
 
       <!-- Message input - Fixed tại bottom -->
       <div v-if="activeConversation" class="message-input">
+        <!-- Hidden file input -->
+        <input
+          ref="fileInput"
+          type="file"
+          multiple
+          :accept="`${FILE_CONFIGS.images.accept},${FILE_CONFIGS.documents.accept}`"
+          :max="MAX_FILES"
+          class="hidden"
+          @change="handleFileSelect"
+        >
+
+        <!-- File Preview Dialog - Show before upload -->
+        <v-dialog
+          :model-value="showFilePreviewDialog"
+          @update:model-value="showFilePreviewDialog = false"
+          @esc="cancelFileUpload"
+        >
+          <v-card>
+            <v-card-title>
+              Selected Files ({{ selectedFiles.length }})
+            </v-card-title>
+
+            <v-card-text>
+              <div class="space-y-3">
+                <div
+                  v-for="(file, index) in selectedFiles"
+                  :key="index"
+                  class="flex items-center gap-3 p-3 border-2 border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                >
+                  <!-- File Icon/Preview -->
+                  <div class="w-12 h-12 flex-shrink-0 flex items-center justify-center bg-purple-50 rounded-lg">
+                    <svg v-if="file.type.startsWith('image/')" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M21 19V5C21 3.9 20.1 3 19 3H5C3.9 3 3 3.9 3 5V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19ZM8.5 13.5L11 16.51L14.5 12L19 18H5L8.5 13.5Z" fill="#6644FF" />
+                    </svg>
+                    <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2ZM16 18H8V16H16V18ZM16 14H8V12H16V14ZM13 9V3.5L18.5 9H13Z" fill="#6644FF" />
+                    </svg>
+                  </div>
+
+                  <!-- File Info -->
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-900 truncate">{{ file.name }}</p>
+                    <p class="text-xs text-gray-500">{{ formatFileSize(file.size) }}</p>
+                  </div>
+
+                  <!-- Action Buttons -->
+                  <div class="flex items-center gap-2">
+                    <!-- Edit button (placeholder for now) -->
+                    <button
+                      class="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      title="Edit"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12.5 2.5L15.5 5.5L5.5 15.5H2.5V12.5L12.5 2.5Z" stroke="#8196B1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+
+                    <!-- Remove button -->
+                    <button
+                      class="p-2 hover:bg-red-50 rounded-lg transition-colors group"
+                      title="Remove"
+                      @click="removeFileFromPreview(index)"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M13.5 4.5L4.5 13.5M4.5 4.5L13.5 13.5" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="group-hover:stroke-red-600" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </v-card-text>
+
+            <v-card-actions>
+              <v-button secondary @click="cancelFileUpload">
+                Cancel
+              </v-button>
+              <v-button
+                :disabled="selectedFiles.length === 0"
+                @click="confirmAndUploadFiles"
+              >
+                Upload {{ selectedFiles.length }} file{{ selectedFiles.length > 1 ? 's' : '' }}
+              </v-button>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
+
+        <!-- Pending Attachments Preview (above message input) -->
+        <div v-if="pendingAttachments.length > 0" class="pending-attachments-container">
+          <div 
+            v-for="(attachment, index) in pendingAttachments"
+            :key="attachment.id"
+            class="attachment-preview"
+          >
+            <!-- File Icon/Preview -->
+            <div class="attachment-content">
+              <div class="file-icon-wrapper">
+                <v-icon 
+                  :name="getFileIcon(attachment.type)" 
+                  class="text-brand-600"
+                  small
+                />
+              </div>
+              
+              <!-- File Name -->
+              <span class="file-name">{{ attachment.filename }}</span>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="attachment-actions">
+              <!-- Edit button - Opens library to replace file -->
+              <v-button
+                icon
+                secondary
+                x-small
+                @click="activeDialog = 'choose'"
+              >
+                <v-icon name="edit" small />
+              </v-button>
+
+              <!-- Remove button -->
+              <v-button 
+                icon
+                secondary
+                x-small
+                @click="removePendingAttachment(index)"
+              >
+                <v-icon name="delete" small />
+              </v-button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Upload Progress Indicator -->
+        <div v-if="isUploading" class="upload-progress-container">
+          <div class="flex flex-col gap-2 p-4 bg-white border border-gray-200 rounded-lg shadow-lg max-w-md">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium text-gray-700">Uploading files...</span>
+              <span class="text-xs text-gray-500">{{ uploadProgress.size }} file(s)</span>
+            </div>
+            <div 
+              v-for="[fileId, progress] in Array.from(uploadProgress.entries())"
+              :key="fileId"
+              class="flex flex-col gap-1"
+            >
+              <div class="flex items-center justify-between text-xs">
+                <span class="truncate max-w-[200px] text-gray-600">{{ progress.fileName }}</span>
+                <span 
+                  class="font-medium"
+                  :class="{
+                    'text-blue-600': progress.status === 'uploading',
+                    'text-green-600': progress.status === 'success',
+                    'text-red-600': progress.status === 'error'
+                  }"
+                >
+                  {{ progress.status === 'success' ? '✓' : progress.status === 'error' ? '✗' : `${progress.progress}%` }}
+                </span>
+              </div>
+              <div class="w-full bg-gray-200 rounded-full h-1.5">
+                <div 
+                  class="h-1.5 rounded-full transition-all duration-300"
+                  :class="{
+                    'bg-blue-600': progress.status === 'uploading',
+                    'bg-green-600': progress.status === 'success',
+                    'bg-red-600': progress.status === 'error'
+                  }"
+                  :style="{ width: `${progress.progress}%` }"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="flex items-end gap-3">
           <div class="flex gap-2">
-            <Story title="VMenu">
-              <v-menu>
+            <Story>
+              <!-- Menu với 3 options upload -->
+              <v-menu :offset-y="-150" :offset-x="127">
                 <template #activator="{ toggle }">
                   <v-icon
                     clickable
@@ -1520,26 +2046,104 @@ onUnmounted(() => {
                     @click="toggle"
                   />
                 </template>
+
                 <v-list>
-                  <v-list-item clickable>
-                    <v-list-item-icon><v-icon name="devices" /></v-list-item-icon>
-                    <v-list-item-content>Upload File from device</v-list-item-content>
+                  <!-- Option 1: Upload from Device -->
+                  <v-list-item clickable @click="triggerFileInput">
+                    <v-list-item-icon>
+                      <v-icon name="phonelink" />
+                    </v-list-item-icon>
+                    <v-list-item-content>
+                      Upload File from Device
+                    </v-list-item-content>
                   </v-list-item>
-                  <v-list-item clickable>
+
+                  <!-- Option 2: Choose from Library -->
+                  <v-list-item clickable @click="activeDialog = 'choose'">
                     <v-list-item-icon>
                       <v-icon name="folder_open" />
                     </v-list-item-icon>
                     <v-list-item-content>
-                      Upload File from Library
+                      Choose File from Library
                     </v-list-item-content>
                   </v-list-item>
 
-                  <v-list-item clickable>
-                    <v-list-item-icon><v-icon name="link" /></v-list-item-icon>
-                    <v-list-item-content>Import File from URL</v-list-item-content>
+                  <!-- Option 3: Import from URL -->
+                  <v-list-item clickable @click="activeDialog = 'url'">
+                    <v-list-item-icon>
+                      <v-icon name="link" />
+                    </v-list-item-icon>
+                    <v-list-item-content>
+                      Import File from URL
+                    </v-list-item-content>
                   </v-list-item>
                 </v-list>
               </v-menu>
+
+              <!-- Dialog 1: Upload from Device -->
+              <v-dialog
+                :model-value="activeDialog === 'upload'"
+                @update:model-value="activeDialog = null"
+                @esc="activeDialog = null"
+              >
+                <v-card>
+                  <v-card-title>Upload File from Device</v-card-title>
+
+                  <v-card-text>
+                    <v-upload
+                      :multiple="true"
+                      @input="onUpload"
+                    />
+                  </v-card-text>
+
+                  <v-card-actions>
+                    <v-button secondary @click="activeDialog = null">
+                      Cancel
+                    </v-button>
+                  </v-card-actions>
+                </v-card>
+              </v-dialog>
+
+              <!-- Dialog 2: Import from URL -->
+              <v-dialog
+                :model-value="activeDialog === 'url'"
+                @update:model-value="activeDialog = null"
+                @esc="activeDialog = null"
+              >
+                <v-card>
+                  <v-card-title>Import File from URL</v-card-title>
+
+                  <v-card-text>
+                    <v-input
+                      v-model="importUrl"
+                      placeholder="https://example.com/file.pdf"
+                      :nullable="false"
+                    />
+                  </v-card-text>
+
+                  <v-card-actions>
+                    <v-button secondary @click="activeDialog = null">
+                      Cancel
+                    </v-button>
+                    <v-button
+                      :disabled="!isValidURL"
+                      :loading="importing"
+                      @click="importFromURL"
+                    >
+                      Import
+                    </v-button>
+                  </v-card-actions>
+                </v-card>
+              </v-dialog>
+
+              <!-- Drawer: Choose from Library -->
+              <drawer-files
+                v-if="activeDialog === 'choose'"
+                :active="activeDialog === 'choose'"
+                :folder="folder"
+                @update:active="activeDialog = null"
+                @input="onSelectFromLibrary"
+              />
             </Story>
             <VEmojiPicker @emoji-selected="logEvent('emoji-selected', $event)">
               My Button
@@ -1571,14 +2175,14 @@ onUnmounted(() => {
               placeholder="Type your message here..."
               rows="1"
               class="flex-1 resize-none px-3 py-2 rounded-lg focus:outline-none focus:ring-0 focus:border-0 font-inter text-base text-text-secondary placeholder-text-muted"
-              @keydown.enter.exact.prevent="sendMessage"
+              @keydown.enter.exact.prevent="(messageText.trim() || pendingAttachments.length > 0) && sendMessage()"
               @input="autoResize"
             />
 
             <button
-              :disabled="!messageText.trim()"
+              :disabled="!messageText.trim() && pendingAttachments.length === 0"
               class="w-9 h-9 flex items-center justify-center rounded-md hover:bg-brand-600 disabled:opacity-60 disabled:cursor-not-allowed text-black transition-colors"
-              @click="sendMessage"
+              @click="sendMessage()"
             >
               <svg
                 width="21"
@@ -1614,127 +2218,130 @@ onUnmounted(() => {
     </div>
 
     <!-- Members Selection Dialog -->
-    <div 
-  v-if="showMembersDialog" 
-  class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10000]"
-  @click.self="closeMembersDialog"
->
-  <div class="bg-[#F0F4F9] rounded-lg shadow-xl w-[500px] max-h-[55vh] flex flex-col overflow-hidden">
-    
-    <!-- Dialog Header -->
-    <div class="flex items-center justify-between pt-4 px-4 border-gray-200">
-      <h2 class="text-xl font-medium text-black">Select members</h2>
-      <button 
-        @click="closeMembersDialog"
-        class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 transition-colors"
-      >
-        <svg width="30" height="30" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-    </div>
-
-    <!-- Dialog Content -->
-    <div class="flex-1 flex flex-col p-3 space-y-3 overflow-hidden">
-      
-      <!-- Search Input with Selected Members -->
-      <div class="relative border border-gray-200 rounded-lg bg-white">
-        <div class="flex flex-wrap gap-1 p-2">
-          <!-- Selected Member Chips -->
-          <div 
-            v-for="member in selectedMemberObjects" 
-            :key="`selected-${member.id}`"
-            class="inline-flex items-center gap-1 bg-[#F0F4F9] border border-[#D3DAE4] rounded-md px-2 py-1"
+    <div
+      v-if="showMembersDialog"
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10000]"
+      @click.self="closeMembersDialog"
+    >
+      <div class="bg-[#F0F4F9] rounded-lg shadow-xl w-[500px] max-h-[55vh] flex flex-col overflow-hidden">
+        <!-- Dialog Header -->
+        <div class="flex items-center justify-between pt-4 px-4 border-gray-200">
+          <h2 class="text-xl font-medium text-black">
+            Select members
+          </h2>
+          <button
+            class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 transition-colors"
+            @click="closeMembersDialog"
           >
-            <!-- Small Avatar -->
-            <div class="w-6 h-6 rounded-full overflow-hidden bg-gray-100 border border-gray-200">
-              <img
-                :src="member.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`"
-                :alt="member.name"
-                class="w-full h-full object-cover"
-                @error="handleImageError($event, member.name)"
+            <svg width="30" height="30" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Dialog Content -->
+        <div class="flex-1 flex flex-col p-3 space-y-3 overflow-hidden">
+          <!-- Search Input with Selected Members -->
+          <div class="relative border border-gray-200 rounded-lg bg-white">
+            <div class="flex flex-wrap gap-1 p-2">
+              <!-- Selected Member Chips -->
+              <div
+                v-for="member in selectedMemberObjects"
+                :key="`selected-${member.id}`"
+                class="inline-flex items-center gap-1 bg-[#F0F4F9] border border-[#D3DAE4] rounded-md px-2 py-1"
+              >
+                <!-- Small Avatar -->
+                <div class="w-6 h-6 rounded-full overflow-hidden bg-gray-100 border border-gray-200">
+                  <img
+                    :src="member.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`"
+                    :alt="member.name"
+                    class="w-full h-full object-cover"
+                    @error="handleImageError($event, member.name)"
+                  >
+                </div>
+                <!-- Member Name -->
+                <span class="text-xs font-medium text-[#344054]">{{ member.name }}</span>
+                <!-- Remove Button -->
+                <button
+                  class="w-3.5 h-3.5 flex items-center justify-center rounded hover:bg-gray-200 transition-colors"
+                  @click="removeMember(member.id)"
+                >
+                  <svg width="7" height="7" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M9 3L3 9M3 3L9 9" stroke="#4F5464" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Search Input -->
+              <input
+                v-model="memberSearchQuery"
+                type="text"
+                placeholder="Search a member"
+                class="flex-1 min-w-[120px] px-1 py-1 text-sm bg-transparent border-none outline-none"
               >
             </div>
-            <!-- Member Name -->
-            <span class="text-xs font-medium text-[#344054]">{{ member.name }}</span>
-            <!-- Remove Button -->
-            <button 
-              @click="removeMember(member.id)"
-              class="w-3.5 h-3.5 flex items-center justify-center rounded hover:bg-gray-200 transition-colors"
+          </div>
+
+          <!-- Description -->
+          <p class="text-base text-gray-400">
+            You can add unlimited members
+          </p>
+
+          <!-- Members List -->
+          <div class="flex-1 space-y-2 pr-1 scroll-style overflow-y-auto">
+            <div
+              v-for="member in filteredMembers"
+              :key="member.id"
+              class="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-md cursor-pointer"
+              @click="toggleMemberSelection(member.id)"
             >
-              <svg width="7" height="7" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M9 3L3 9M3 3L9 9" stroke="#4F5464" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <!-- Checkbox -->
+              <div class="relative">
+                <input
+                  :id="`member-${member.id}`"
+                  type="checkbox"
+                  :checked="selectedMembers.includes(member.id)"
+                  class="w-4 h-4 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-500 focus:ring-"
+                  @click.stop
+                  @change="toggleMemberSelection(member.id)"
+                >
+              </div>
+
+              <!-- Avatar and Name -->
+              <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-full overflow-hidden bg-gray-100 border border-gray-200">
+                  <img
+                    :src="member.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`"
+                    :alt="member.name"
+                    class="w-full h-full object-cover"
+                    @error="handleImageError($event, member.name)"
+                  >
+                </div>
+                <p class="text-sm font-medium text-gray-900">
+                  {{ member.name }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <VDivider />
+
+          <!-- Create Group Button -->
+          <div class="pt-2">
+            <button
+              :disabled="selectedMembers.length === 0"
+              class="w-full py-3 text-sm font-medium rounded-md transition-colors"
+              :class="selectedMembers.length > 0
+                ? 'bg-[#6644FF] text-white hover:bg-[#5533DD]'
+                : 'bg-gray-200 text-gray-600 cursor-not-allowed'"
+              @click="createGroup"
+            >
+              Create a group
             </button>
           </div>
-          
-          <!-- Search Input -->
-          <input
-            v-model="memberSearchQuery"
-            type="text"
-            placeholder="Search a member"
-            class="flex-1 min-w-[120px] px-1 py-1 text-sm bg-transparent border-none outline-none"
-          >
         </div>
-      </div>
-
-      <!-- Description -->
-      <p class="text-base text-gray-400">You can add unlimited members</p>
-
-      <!-- Members List -->
-      <div class="flex-1 space-y-2 pr-1 scroll-style overflow-y-auto">
-        <div 
-          v-for="member in filteredMembers" 
-          :key="member.id"
-          class="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-md cursor-pointer"
-          @click="toggleMemberSelection(member.id)"
-        >
-          <!-- Checkbox -->
-          <div class="relative">
-            <input
-              :id="`member-${member.id}`"
-              type="checkbox"
-              :checked="selectedMembers.includes(member.id)"
-              class="w-4 h-4 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-500 focus:ring-"
-              @click.stop
-              @change="toggleMemberSelection(member.id)"
-            >
-          </div>
-
-          <!-- Avatar and Name -->
-          <div class="flex items-center gap-4">
-            <div class="w-10 h-10 rounded-full overflow-hidden bg-gray-100 border border-gray-200">
-              <img
-                :src="member.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`"
-                :alt="member.name"
-                class="w-full h-full object-cover"
-                @error="handleImageError($event, member.name)"
-              >
-            </div>
-            <p class="text-sm font-medium text-gray-900">{{ member.name }}</p>
-          </div>
-        </div>
-      </div>
-
-      <VDivider />
-
-      <!-- Create Group Button -->
-      <div class="pt-2">
-        <button
-          @click="createGroup"
-          :disabled="selectedMembers.length === 0"
-          class="w-full py-3 text-sm font-medium rounded-md transition-colors"
-          :class="selectedMembers.length > 0 
-            ? 'bg-[#6644FF] text-white hover:bg-[#5533DD]' 
-            : 'bg-gray-200 text-gray-600 cursor-not-allowed'"
-        >
-          Create a group
-        </button>
       </div>
     </div>
-  </div>
-</div>
-
   </private-view>
 </template>
 
@@ -1770,9 +2377,113 @@ onUnmounted(() => {
   background: var(--background-page, white);
   scroll-behavior: smooth;
 }
-.message-input {
+
+/* Pending Attachments Preview */
+.pending-attachments-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.attachment-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  background: white;
+  border: 2px solid #D3DAE4;
+  border-radius: 6px;
+  transition: border-color 0.2s;
+}
+
+.attachment-preview:hover {
+  border-color: #B8C5D6;
+}
+
+.attachment-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: #F0ECFF;
+  border-radius: 6px;
   flex-shrink: 0;
-  min-height: 80px;
+}
+
+.file-name {
+  font-family: Inter;
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1.21;
+  color: #0461cc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.action-btn:hover {
+  background: #F3F4F6;
+}
+
+.remove-btn:hover svg path {
+  stroke: #EF4444;
+}
+
+.upload-progress-container {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.message-input {
+  position: relative;
+  flex-shrink: 0;
+  min-height: 50px;
   padding: 16px;
   border-top: 1px solid var(--border-normal, #d3dae4);
   background: var(--background-page, white);
@@ -1808,6 +2519,4 @@ onUnmounted(() => {
 .scroll-style::-webkit-scrollbar-thumb:hover {
   background: var(--border-subdued, #a2b5cd);
 }
-
 </style>
-
