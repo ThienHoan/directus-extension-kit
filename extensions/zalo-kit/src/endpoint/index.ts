@@ -3,6 +3,16 @@ import { defineEndpoint } from '@directus/extensions-sdk'
 import { ThreadType } from 'zca-js'
 import ZaloService from './services/ZaloService' // Assuming ZaloService is correctly imported
 
+// Helper function to format file size
+function formatFileSize(bytes: number): string {
+  if (bytes === 0)
+    return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${Math.round((bytes / k ** i) * 100) / 100} ${sizes[i]}`
+}
+
 export default defineEndpoint(async (router, { database, getSchema, services }) => {
   const { ItemsService } = services
 
@@ -163,13 +173,13 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
   // POST /zalo/send - Send a message
   router.post('/send', async (req, res) => {
     try {
-      const { conversationId, message, content, clientId } = req.body
+      const { conversationId, message, content, clientId, attachments } = req.body
       const messageContent = message || content
 
       // 1. Validation
-      if (!conversationId || !messageContent) {
+      if (!conversationId || (!messageContent && (!attachments || attachments.length === 0))) {
         return res.status(400).json({
-          error: 'conversationId and message are required',
+          error: 'conversationId and (message or attachments) are required',
         })
       }
 
@@ -232,13 +242,67 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
         })
       }
 
+      // Send message to Zalo
       let zaloResult: any
       try {
-        zaloResult = await zaloService.apiSendMessage(
-          { msg: messageContent },
-          zaloThreadId,
-          threadType,
-        )
+        // Build message content with file links
+        let finalMessage = messageContent || ''
+
+        // If we have attachments, add download links
+        if (attachments && attachments.length > 0) {
+          console.log(`📎 Adding ${attachments.length} file link(s) to message`)
+
+          const fileLinks: string[] = []
+
+          for (const attachment of attachments) {
+            try {
+              // Get file from Directus storage
+              const fileResponse = await database('directus_files')
+                .where('id', attachment.fileId || attachment.id)
+                .first()
+
+              if (!fileResponse) {
+                console.error('File not found in database:', attachment.fileId)
+                continue
+              }
+
+              // Create public download link
+              const fileUrl = `http://localhost:8055/assets/${fileResponse.id}?download`
+              const fileName = attachment.filename || fileResponse.filename_download
+              const fileSize = formatFileSize(attachment.size || fileResponse.filesize)
+
+              // Add to message
+              fileLinks.push(`📎 ${fileName} (${fileSize})\n🔗 ${fileUrl}`)
+
+              console.log(`✅ Added file link: ${fileName}`)
+            }
+            catch (fileError) {
+              console.error(`Failed to process file ${attachment.filename}:`, fileError)
+            }
+          }
+
+          // Append file links to message
+          if (fileLinks.length > 0) {
+            if (finalMessage) {
+              finalMessage = `${finalMessage}\n\n${fileLinks.join('\n\n')}`
+            }
+            else {
+              finalMessage = fileLinks.join('\n\n')
+            }
+          }
+        }
+
+        // Send message to Zalo (text only with file links)
+        if (finalMessage) {
+          zaloResult = await zaloService.apiSendMessage(
+            { msg: finalMessage },
+            zaloThreadId,
+            threadType,
+          )
+        }
+        else {
+          throw new Error('No message content to send')
+        }
       }
       catch (zaloError: any) {
         console.error('Zalo API Error:', zaloError)
@@ -282,6 +346,11 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
           .first()
 
         if (existingMessage) {
+          // Get attachments from zalo_attachments table
+          const messageAttachments = await database('zalo_attachments')
+            .where('message_id', existingMessage.id)
+            .select('*')
+
           return res.json({
             success: true,
             message: 'Message already processed',
@@ -290,6 +359,7 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
               conversationId: existingMessage.conversation_id,
               content: existingMessage.content,
               sent_at: existingMessage.sent_at,
+              attachments: messageAttachments,
             },
           })
         }
@@ -299,7 +369,7 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
             id: messageId,
             client_id: clientMsgId,
             conversation_id: conversationId,
-            content: messageContent,
+            content: messageContent || '',
             sender_id: zaloUserId,
             sent_at: timestamp,
             received_at: timestamp,
@@ -310,10 +380,25 @@ export default defineEndpoint(async (router, { database, getSchema, services }) 
             updated_at: timestamp,
           })
           .onConflict('id')
-          .merge({
-            client_id: clientMsgId,
-            updated_at: timestamp,
-          })
+          .ignore() // Ignore duplicates instead of merge
+
+        // Save attachments to zalo_attachments table if present
+        if (attachments && attachments.length > 0) {
+          console.log(`💾 Saving ${attachments.length} attachment(s) to database`)
+          const attachmentRecords = attachments.map((att: any, index: number) => ({
+            message_id: messageId,
+            file_type: att.type || 'file',
+            file_name: att.filename || `file_${index}`,
+            file_url: att.url || `/assets/${att.fileId || att.id}`,
+            file_size: att.size || null,
+            thumbnail_url: att.thumbnail || null,
+            duration: att.duration || null,
+            zalo_id: att.id || att.fileId || null,
+            created_at: timestamp,
+          }))
+
+          await database('zalo_attachments').insert(attachmentRecords).onConflict().ignore()
+        }
 
         await database('zalo_conversations')
           .where('id', conversationId)
