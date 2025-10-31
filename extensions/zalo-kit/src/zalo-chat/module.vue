@@ -15,6 +15,9 @@ import {
   MessagesList,
   ProfileDropdown,
   UploadProgress,
+  SwitchAccountView,
+  SwitchingAccountState,
+  AccountSwitchedSuccess,
 } from './components'
 import { useFileUpload } from './composables/useFileUpload'
 import { useWebSocket } from './composables/useWebSocket'
@@ -73,7 +76,10 @@ const highlightedMessageId = ref<string | null>(null)
 const showMembersDialog = ref(false)
 const memberSearchQuery = ref('')
 const selectedMembers = ref<string[]>([])
-const showManageAccountsDialog = ref(false)
+const showManageAccountsView = ref(false)
+const isSwitchingAccount = ref(false)
+const switchAccountSuccess = ref(false)
+const switchedAccountName = ref('')
 
 // Mock accounts data - replace with real data from API
 const mockAccounts = ref([
@@ -100,6 +106,115 @@ const mockAccounts = ref([
   },
 ])
 const currentAccountId = ref('1')
+
+// Mock conversations for each account
+const mockConversationsPerAccount = {
+  '1': [ // Nha Khuyen's conversations
+    {
+      id: '101',
+      name: 'Olivia Rhye',
+      lastMessage: 'There are many variations of passages',
+      lastMessageTime: '2024-10-31T13:10:00Z',
+      timestamp: '01:10 PM',
+      avatar: 'https://i.pravatar.cc/150?img=11',
+      online: true,
+      unreadCount: 0,
+      type: 'direct' as const,
+    },
+    {
+      id: '102',
+      name: 'Adam Levine',
+      lastMessage: 'There are many variations of passages',
+      lastMessageTime: '2024-10-31T13:10:00Z',
+      timestamp: '01:10 PM',
+      avatar: 'https://i.pravatar.cc/150?img=12',
+      online: true,
+      unreadCount: 0,
+      type: 'direct' as const,
+    },
+    {
+      id: '103',
+      name: 'Kadin Botosh',
+      lastMessage: 'There are many variations of passages',
+      lastMessageTime: '2024-10-31T13:10:00Z',
+      timestamp: '01:10 PM',
+      avatar: 'https://i.pravatar.cc/150?img=13',
+      online: true,
+      unreadCount: 0,
+      type: 'direct' as const,
+    },
+  ],
+  '2': [ // Thien Hoan's conversations
+    {
+      id: '201',
+      name: 'Wilson Press',
+      lastMessage: 'Hello from Wilson',
+      lastMessageTime: '2024-10-31T14:30:00Z',
+      timestamp: '02:30 PM',
+      avatar: 'https://i.pravatar.cc/150?img=21',
+      online: true,
+      unreadCount: 2,
+      type: 'direct' as const,
+    },
+    {
+      id: '202',
+      name: 'Erin George',
+      lastMessage: 'Can you review this?',
+      lastMessageTime: '2024-10-31T15:15:00Z',
+      timestamp: '03:15 PM',
+      avatar: 'https://i.pravatar.cc/150?img=22',
+      online: false,
+      unreadCount: 0,
+      type: 'direct' as const,
+    },
+    {
+      id: '203',
+      name: 'Team Design',
+      lastMessage: 'Meeting at 4pm',
+      lastMessageTime: '2024-10-31T15:45:00Z',
+      timestamp: '03:45 PM',
+      avatar: 'https://i.pravatar.cc/150?img=23',
+      online: true,
+      unreadCount: 5,
+      type: 'group' as const,
+    },
+  ],
+  '3': [ // Giau Le's conversations
+    {
+      id: '301',
+      name: 'Giana Baptista',
+      lastMessage: 'Let me check that',
+      lastMessageTime: '2024-10-31T10:20:00Z',
+      timestamp: '10:20 AM',
+      avatar: 'https://i.pravatar.cc/150?img=31',
+      online: true,
+      unreadCount: 0,
+      type: 'direct' as const,
+    },
+    {
+      id: '302',
+      name: 'Jaydon Good',
+      lastMessage: 'Thanks for the update',
+      lastMessageTime: '2024-10-31T11:00:00Z',
+      timestamp: '11:00 AM',
+      avatar: 'https://i.pravatar.cc/150?img=32',
+      online: false,
+      unreadCount: 1,
+      type: 'direct' as const,
+    },
+    {
+      id: '303',
+      name: 'Marketing Team',
+      lastMessage: 'New campaign ideas',
+      lastMessageTime: '2024-10-31T11:30:00Z',
+      timestamp: '11:30 AM',
+      avatar: 'https://i.pravatar.cc/150?img=33',
+      online: true,
+      unreadCount: 3,
+      type: 'group' as const,
+    },
+  ],
+}
 
 const conversationTypeFilter = ref<'all' | 'group' | 'direct'>('all')
 
@@ -468,6 +583,11 @@ function selectConversation(id: string) {
   if (activeConversationId.value === id) {
     console.log('⏭️ Conversation already active:', id)
     return
+  }
+
+  // Close manage accounts view if it's open
+  if (showManageAccountsView.value) {
+    showManageAccountsView.value = false
   }
 
   isSelectingConversation = true
@@ -1218,22 +1338,59 @@ function createGroup() {
 
 // Manage accounts handlers
 function handleManageAccounts() {
-  showManageAccountsDialog.value = true
+  showManageAccountsView.value = true
+  activeConversationId.value = '' // Clear active conversation
 }
 
 function handleSwitchAccount(accountId: string) {
   console.log('Switching to account:', accountId)
-  currentAccountId.value = accountId
-  // Update mock data
-  mockAccounts.value = mockAccounts.value.map(acc => ({
-    ...acc,
-    isActive: acc.id === accountId,
-  }))
-  // TODO: Implement actual account switching logic
-  // - Clear current data
-  // - Re-authenticate with new account
-  // - Reload conversations
-  showManageAccountsDialog.value = false
+  
+  // Set switching state
+  isSwitchingAccount.value = true
+  switchAccountSuccess.value = false
+  
+  // Find account name
+  const account = mockAccounts.value.find(acc => acc.id === accountId)
+  switchedAccountName.value = account?.name || ''
+  
+  // Simulate loading time
+  setTimeout(() => {
+    // Update mock data
+    currentAccountId.value = accountId
+    mockAccounts.value = mockAccounts.value.map(acc => ({
+      ...acc,
+      isActive: acc.id === accountId,
+    }))
+    
+    // Update current user info
+    if (account) {
+      currentUserName.value = account.name
+      currentUserAvatar.value = account.avatar
+    }
+    
+    // Load mock conversations for this account
+    const accountConversations = mockConversationsPerAccount[accountId as keyof typeof mockConversationsPerAccount] || []
+    conversations.value = accountConversations
+    
+    // Clear active conversation
+    activeConversationId.value = ''
+    messages.value = []
+    
+    // Show success state
+    isSwitchingAccount.value = false
+    switchAccountSuccess.value = true
+    
+    // Hide success state after 2 seconds and return to chat
+    setTimeout(() => {
+      switchAccountSuccess.value = false
+      showManageAccountsView.value = false
+      
+      // Select first conversation if available
+      if (conversations.value.length > 0 && conversations.value[0]) {
+        selectConversation(conversations.value[0].id)
+      }
+    }, 2000)
+  }, 1500) // 1.5 seconds loading time
 }
 
 function handleAddAccount() {
@@ -1241,7 +1398,7 @@ function handleAddAccount() {
   // TODO: Implement add account flow
   // - Navigate to account setup
   // - Or show account connection dialog
-  showManageAccountsDialog.value = false
+  alert('Add account feature - Coming soon!')
 }
 
 function scrollToBottom() {
@@ -1527,21 +1684,40 @@ const filteredMembers = computed(() => {
 
     <!-- Main Chat Area với absolute positioning -->
     <div class="chat-container">
-      <!-- Chat Header - Fixed tại top -->
-      <ChatHeader
-        v-if="activeConversation"
-        :conversation="activeConversation"
-        @open-members="openMembersDialog"
-        @open-search="showFunctionA"
-        @open-info="showFunctionB"
+      <!-- Switch Account View -->
+      <SwitchAccountView
+        v-if="showManageAccountsView && !isSwitchingAccount && !switchAccountSuccess"
+        :accounts="mockAccounts"
+        @switch-account="handleSwitchAccount"
+        @add-account="handleAddAccount"
       />
 
-      <!-- Messages area - Scrollable với padding cho header và input -->
-      <div
-        v-if="activeConversation"
-        ref="messagesContainer"
-        class="messages-area"
-      >
+      <!-- Switching Account Loading State -->
+      <SwitchingAccountState v-else-if="isSwitchingAccount" />
+
+      <!-- Account Switched Success State -->
+      <AccountSwitchedSuccess 
+        v-else-if="switchAccountSuccess" 
+        :account-name="switchedAccountName"
+      />
+
+      <!-- Normal Chat View -->
+      <template v-else>
+        <!-- Chat Header - Fixed tại top -->
+        <ChatHeader
+          v-if="activeConversation"
+          :conversation="activeConversation"
+          @open-members="openMembersDialog"
+          @open-search="showFunctionA"
+          @open-info="showFunctionB"
+        />
+
+        <!-- Messages area - Scrollable với padding cho header và input -->
+        <div
+          v-if="activeConversation"
+          ref="messagesContainer"
+          class="messages-area"
+        >
         <div
           class="min-h-full flex flex-col justify-end"
         >
@@ -1962,6 +2138,7 @@ const filteredMembers = computed(() => {
 
       <!-- Empty state -->
       <EmptyState v-else />
+      </template>
     </div>
 
     <!-- Members Selection Dialog -->
@@ -1976,16 +2153,6 @@ const filteredMembers = computed(() => {
       @toggle-member="toggleMemberSelection"
       @remove-member="removeMember"
       @create-group="createGroup"
-    />
-
-    <!-- Manage Accounts Dialog -->
-    <ManageAccountsDialog
-      :show="showManageAccountsDialog"
-      :accounts="mockAccounts"
-      :current-account-id="currentAccountId"
-      @close="showManageAccountsDialog = false"
-      @switch-account="handleSwitchAccount"
-      @add-account="handleAddAccount"
     />
   </private-view>
 </template>
