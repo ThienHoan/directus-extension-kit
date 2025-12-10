@@ -101,6 +101,15 @@ export default defineEventHandler(async (context, { req, res }) => {
 
       const conversation = conversations[0]
 
+      // Validate conversation exists
+      if (!conversation) {
+        res.status(404).json({
+          error: 'Conversation data is invalid',
+          conversationId,
+        })
+        return
+      }
+
       if (conversation.group_id && conversation.group_id !== null) {
         zaloThreadId = String(conversation.group_id)
         threadType = ThreadType.Group
@@ -151,13 +160,13 @@ export default defineEventHandler(async (context, { req, res }) => {
 
       // Send image attachments via ZCA-JS
       if (attachments && attachments.length > 0) {
-        console.log(`📎 Sending ${attachments.length} attachments to Zalo...`)
+        console.warn(`📎 Sending ${attachments.length} attachments to Zalo...`)
 
         for (const attachment of attachments) {
           try {
             // Check if it's an image
             if (attachment.type.startsWith('image/')) {
-              console.log(`📷 Sending image: ${attachment.filename}`)
+              console.warn(`📷 Sending image: ${attachment.filename}`)
 
               // Get file metadata from Directus to get width/height
               let width: number | undefined
@@ -171,31 +180,52 @@ export default defineEventHandler(async (context, { req, res }) => {
                 })
 
                 const fileData = await filesService.readOne(attachment.file_id, {
-                  fields: ['width', 'height', 'type', 'filename_disk'],
+                  fields: ['width', 'height', 'type', 'filename_disk', 'storage'],
+                })
+
+                console.warn(`📂 File data from Directus:`, {
+                  width: fileData.width,
+                  height: fileData.height,
+                  storage: fileData.storage,
+                  filename_disk: fileData.filename_disk,
                 })
 
                 width = fileData.width
                 height = fileData.height
 
-                // Read file from Directus storage instead of HTTP download
-                const assetsService = new context.services.AssetsService({
-                  schema: await context.getSchema(),
-                  accountability: { admin: true, role: null, user: null, roles: [], app: false, ip: null },
-                })
+                // Read file directly from storage using filename_disk
+                if (fileData.filename_disk) {
+                  const fs = await import('node:fs/promises')
+                  const path = await import('node:path')
 
-                const { stream } = await assetsService.getAsset(attachment.file_id)
+                  // Directus in Docker container stores files in /directus/uploads
+                  const uploadsPath = '/directus/uploads'
+                  const filePath = path.join(uploadsPath, fileData.filename_disk)
 
-                // Convert stream to buffer
-                const chunks: any[] = []
-                for await (const chunk of stream) {
-                  chunks.push(chunk)
+                  console.warn(`📂 Reading file from:`, filePath)
+
+                  try {
+                    fileBuffer = await fs.readFile(filePath)
+                    console.warn(`✅ Buffer read successfully: ${fileBuffer.length} bytes`)
+                  }
+                  catch (readErr: any) {
+                    console.error(`❌ Failed to read file:`, readErr.message)
+                  }
                 }
-                const BufferConstructor = (await import('node:buffer')).Buffer
-                fileBuffer = BufferConstructor.concat(chunks)
+                else {
+                  console.warn('⚠️ No filename_disk found in file data')
+                }
               }
-              catch (err) {
-                console.warn('⚠️ Could not fetch file metadata from Directus:', err)
+              catch (err: any) {
+                console.error('❌ Failed to read file from Directus storage:', err.message, err.stack)
               }
+
+              console.warn(`📤 About to send image with params:`, {
+                hasBuffer: !!fileBuffer,
+                bufferSize: fileBuffer?.length,
+                width,
+                height,
+              })
 
               // Send image via ZCA-JS sendMessage with metadata
               const imageResult = await zaloService.sendImage(
@@ -209,12 +239,12 @@ export default defineEventHandler(async (context, { req, res }) => {
 
               if (imageResult) {
                 sentAttachments.push(attachment.file_id)
-                console.log(`✅ Image sent successfully: ${attachment.filename}`)
+                console.warn(`✅ Image sent successfully: ${attachment.filename}`)
               }
             }
             else {
               // For non-image files, send as text message with file info
-              console.log(`📄 Sending file info: ${attachment.filename}`)
+              console.warn(`📄 Sending file info: ${attachment.filename}`)
               await zaloService.sendMessage(
                 { msg: `📎 File: ${attachment.filename} (${(attachment.size / 1024).toFixed(2)} KB)` },
                 zaloThreadId,
@@ -285,6 +315,16 @@ export default defineEventHandler(async (context, { req, res }) => {
 
       if (existingMessages && existingMessages.length > 0) {
         const existingMessage = existingMessages[0]
+
+        // Validate existing message
+        if (!existingMessage) {
+          console.error('Existing message is undefined')
+          res.status(500).json({
+            error: 'Invalid existing message data',
+          })
+          return
+        }
+
         res.json({
           success: true,
           message: 'Message already processed',
@@ -302,7 +342,7 @@ export default defineEventHandler(async (context, { req, res }) => {
         id: messageId,
         client_id: clientMsgId,
         conversation_id: conversationId,
-        content: messageContent || (attachments && attachments.length > 0 ? `📎 ${attachments.length} file(s)` : ''),
+        content: messageContent || '', // Empty if only sending attachments
         sender_id: zaloUserId,
         sent_at: timestamp.toISOString(),
         received_at: timestamp.toISOString(),
@@ -364,7 +404,7 @@ export default defineEventHandler(async (context, { req, res }) => {
         { filter: { id: { _eq: conversationId } } },
         {
           last_message_id: messageId,
-          last_message: messageContent, // ✅ Add last_message content
+          last_message: messageContent || (attachments && attachments.length > 0 ? '📎 Attachment' : ''),
           last_message_time: timestamp.toISOString(),
         },
       )

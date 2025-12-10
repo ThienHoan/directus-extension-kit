@@ -119,8 +119,15 @@ class ZaloMessageService {
     return sendMessage(content, threadId, threadType)
   }
 
-  async sendImage(imageUrl: string, threadId: string, threadType: number): Promise<any> {
-    return sendImage(imageUrl, threadId, threadType)
+  async sendImage(
+    imageUrl: string,
+    threadId: string,
+    threadType: number,
+    providedWidth?: number,
+    providedHeight?: number,
+    providedBuffer?: InstanceType<typeof import('node:buffer').Buffer>,
+  ): Promise<any> {
+    return sendImage(imageUrl, threadId, threadType, providedWidth, providedHeight, providedBuffer)
   }
 
   getCurrentUserId(): string | null {
@@ -612,9 +619,29 @@ async function listenerHandleMessageDirect(rawData: any): Promise<void> {
     })
 
     if (existingConvs.length > 0) {
+      // ✅ Filter JSON from last_message - don't show JSON in conversation preview
+      // Convert to string first in case content is an object
+      let lastMessageText = typeof content === 'string' ? content : (content ? JSON.stringify(content) : '')
+
+      if (lastMessageText) {
+        const trimmed = lastMessageText.trim()
+        // Check if it's a JSON object/array string
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
+          || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try {
+            // Try to parse - if valid JSON, hide it and show attachment indicator
+            JSON.parse(trimmed)
+            lastMessageText = '📎 Attachment'
+          }
+          catch {
+            // Not valid JSON, keep as-is
+          }
+        }
+      }
+
       await conversationsService.updateOne(existingConvs[0].id, {
         last_message_id: messageId,
-        last_message: content,
+        last_message: lastMessageText,
         last_message_time: sentAt.toISOString(),
       })
     }

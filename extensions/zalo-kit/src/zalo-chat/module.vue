@@ -144,7 +144,7 @@ const {
   isUploading,
   FILE_CONFIGS,
   MAX_FILES,
-} = useFileUpload()
+} = useFileUpload(api) // ✅ Pass api instance
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<File[]>([])
 const showFilePreviewDialog = ref(false)
@@ -395,7 +395,7 @@ async function sendMessage() {
     // Send via HTTP API - BE will broadcast via WebSocket
     await api.post('/zalo/send', {
       conversationId: activeConversationId.value,
-      message: content || (attachmentsToSend.length > 0 ? `📎 ${attachmentsToSend.length} file(s)` : ''),
+      message: content || '', // Empty string if only sending attachments
       attachments: attachmentsToSend.map(att => ({
         file_id: att.id,
         url: att.url,
@@ -409,7 +409,7 @@ async function sendMessage() {
     // Update conversation preview
     const now = new Date().toISOString()
     updateConversationOnNewMessage(activeConversationId.value, {
-      content: content || `📎 ${attachmentsToSend.length} file(s)`,
+      content: content || (attachmentsToSend.length > 0 ? '📎 Attachment' : ''),
       sent_at: now,
     })
 
@@ -736,21 +736,80 @@ function handleNewMessage(data: any) {
       const senderAvatar = typeof senderIdRaw === 'object' ? senderIdRaw?.avatar_url : messageData.avatar
       const direction = senderId === currentUserId.value ? 'out' : 'in'
 
+      // Try to get attachments - fetch async if needed
+      let attachments = messageData.attachments || []
+
+      // ✅ Filter JSON content - same logic as API endpoint
+      let textContent = messageData.content || messageData.text || ''
+      if (textContent) {
+        const trimmed = textContent.trim()
+        // Check if it's a JSON object string (starts with { or [)
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
+          || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try {
+            // Try to parse - if successful, it's JSON, don't display
+            JSON.parse(trimmed)
+            textContent = '' // Hide JSON object
+          }
+          catch {
+            // Not valid JSON, display as-is
+          }
+        }
+      }
+
       messages.value[optimisticIndex] = {
         id: messageId,
         direction,
-        text: messageData.content || messageData.text || '',
+        text: textContent,
         senderName,
         senderId,
         time: messageData.sent_at || messageData.time || new Date().toISOString(),
         avatar: senderAvatar,
         status: direction === 'out' ? 'sent' : undefined,
-        files: messageData.attachments || [],
+        files: attachments,
         reactions: messageData.reactions || [],
         isEdited: messageData.is_edited || messageData.isEdited || false,
         isUndone: messageData.is_undone || messageData.isUndone || false,
         clientId,
       }
+
+      // If no attachments in message data, fetch them asynchronously
+      if ((!attachments || attachments.length === 0) && messageId) {
+        ;(async () => {
+          try {
+            const attachmentsResponse = await api.get(`/items/zalo_attachments`, {
+              params: {
+                filter: { message_id: { _eq: messageId } },
+                fields: ['id', 'url', 'file_name', 'mime_type', 'file_size', 'width', 'height', 'thumbnail_url'],
+              },
+            })
+
+            if (attachmentsResponse?.data?.data && attachmentsResponse.data.data.length > 0) {
+              const baseUrl = window.location.origin
+              const fetchedAttachments = attachmentsResponse.data.data.map((att: any) => ({
+                id: att.id,
+                url: att.url.startsWith('http') ? att.url : `${baseUrl}${att.url}`,
+                filename: att.file_name,
+                type: att.mime_type,
+                size: att.file_size,
+                width: att.width,
+                height: att.height,
+                thumbnail: att.thumbnail_url || att.url,
+              }))
+
+              // Update message with attachments
+              const msgIndex = messages.value.findIndex(m => m.id === messageId)
+              if (msgIndex !== -1) {
+                messages.value[msgIndex].files = fetchedAttachments
+              }
+            }
+          }
+          catch (error) {
+            console.error('Failed to fetch attachments for optimistic message:', messageId, error)
+          }
+        })()
+      }
+
       return
     }
   }
@@ -770,6 +829,24 @@ function handleNewMessage(data: any) {
 
   // Try to get attachments - fetch async in background if needed
   let attachments = messageData.attachments || []
+
+  // ✅ Filter JSON content - same logic as API endpoint
+  let textContent = messageData.content || messageData.text || ''
+  if (textContent) {
+    const trimmed = textContent.trim()
+    // Check if it's a JSON object string (starts with { or [)
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
+      || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        // Try to parse - if successful, it's JSON, don't display
+        JSON.parse(trimmed)
+        textContent = '' // Hide JSON object
+      }
+      catch {
+        // Not valid JSON, display as-is
+      }
+    }
+  }
 
   // If no attachments in message data, try to fetch them
   if ((!attachments || attachments.length === 0) && messageId) {
@@ -812,7 +889,7 @@ function handleNewMessage(data: any) {
   messages.value.push({
     id: messageId,
     direction,
-    text: messageData.content || messageData.text || '',
+    text: textContent,
     senderName,
     senderId,
     time: messageData.sent_at || messageData.time || new Date().toISOString(),
@@ -1209,7 +1286,25 @@ function updateConversationOnNewMessage(conversationId: string, message: any) {
   if (!conversation)
     return
 
-  const messagePreview = message.content || message.text || ''
+  let messagePreview = message.content || message.text || ''
+
+  // ✅ Filter JSON content before displaying in conversation list
+  if (messagePreview) {
+    const trimmed = messagePreview.trim()
+    // Check if it's a JSON object/array string
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
+      || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        JSON.parse(trimmed)
+        // It's valid JSON (Zalo attachment metadata), replace with attachment indicator
+        messagePreview = '📎 Attachment'
+      }
+      catch {
+        // Not valid JSON, keep original text
+      }
+    }
+  }
+
   const messageTime = message.sent_at || message.time || message.sentAt || new Date().toISOString()
   const messageTimestamp = new Date(messageTime).getTime()
 
@@ -1315,7 +1410,7 @@ async function confirmAndUploadFiles() {
 
   try {
     // Use the composable to upload files
-    const { uploadFiles } = useFileUpload()
+    const { uploadFiles } = useFileUpload(api) // ✅ Pass api instance
 
     console.log('📤 Uploading files to Directus...')
     const result = await uploadFiles(selectedFiles.value, activeConversationId.value)
